@@ -1,0 +1,20 @@
+{
+  "_ainet": {
+    "doc": "MilestoneLog.json",
+    "role": "Curated list of Hayden's most important life milestones. Used by Memories/Milestones/Log.json.",
+    "item_shape": {
+      "id": "",
+      "title": "",
+      "date": "",
+      "why_it_matters": "",
+      "what_changed": "",
+      "sides_involved": [],
+      "people_involved": [],
+      "related_paths": [],
+      "importance": 0.0,
+      "tags": []
+    }
+  },
+  "milestones": [],
+  "last_updated": ""
+}

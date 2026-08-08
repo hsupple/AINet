@@ -1,0 +1,176 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "create_folder",
+      "path": "Hayden/Preferences/Music",
+      "summary": "Music prefs folder"
+    },
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "Hayden/Preferences/Music/artists.json",
+      "summary": "Seed music tastes"
+    },
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "patch_json",
+      "path": "Hayden/Read.json",
+      "summary": "Surface music prefs",
+      "details": {
+        "keys": [
+          "priority"
+        ]
+      }
+    },
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "create_folder",
+      "path": "Work/Projects/AINet",
+      "summary": "Boot project COP"
+    },
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "Work/Projects/AINet/Profile.json",
+      "summary": "COP file Profile.json"
+    },
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "Work/Projects/AINet/Read.json",
+      "summary": "COP file Read.json"
+    },
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "Work/Projects/AINet/Plan.json",
+      "summary": "COP file Plan.json"
+    },
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "Work/Projects/AINet/Decisions.json",
+      "summary": "COP file Decisions.json"
+    },
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "Work/Projects/AINet/Open Questions.json",
+      "summary": "COP file Open Questions.json"
+    },
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "create_folder",
+      "path": "Work/Projects/AINet/History",
+      "summary": "COP folder History/"
+    },
+    {
+      "ts": "2026-08-08T11:17:21+00:00",
+      "actor": "ai",
+      "action": "create_folder",
+      "path": "Work/Projects/AINet/Files",
+      "summary": "COP folder Files/"
+    },
+    {
+      "ts": "2026-08-08T11:48:22+00:00",
+      "actor": "ai",
+      "action": "patch_json",
+      "path": "Hayden/Profile.json",
+      "summary": "note host",
+      "details": {
+        "keys": [
+          "summary"
+        ]
+      }
+    },
+    {
+      "ts": "2026-08-08T11:48:23+00:00",
+      "actor": "ai",
+      "action": "create_folder",
+      "path": "Hayden/Preferences/Podcasts",
+      "summary": "Created folder"
+    },
+    {
+      "ts": "2026-08-08T11:52:06+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "School/Courses/_tmpl_test/Profile.json",
+      "summary": "Created JSON from template"
+    },
+    {
+      "ts": "2026-08-08T12:03:06+00:00",
+      "actor": "ai",
+      "action": "create_folder",
+      "path": "School/Courses/SmokeCOP",
+      "summary": "Created course COP root"
+    },
+    {
+      "ts": "2026-08-08T12:03:06+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "School/Courses/SmokeCOP/Profile.json",
+      "summary": "COP file Profile.json"
+    },
+    {
+      "ts": "2026-08-08T12:03:06+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "School/Courses/SmokeCOP/Read.json",
+      "summary": "COP file Read.json"
+    },
+    {
+      "ts": "2026-08-08T12:03:06+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "School/Courses/SmokeCOP/Plan.json",
+      "summary": "COP file Plan.json"
+    },
+    {
+      "ts": "2026-08-08T12:03:06+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "School/Courses/SmokeCOP/History.json",
+      "summary": "COP file History.json"
+    },
+    {
+      "ts": "2026-08-08T12:03:06+00:00",
+      "actor": "ai",
+      "action": "create_folder",
+      "path": "School/Courses/SmokeCOP/History",
+      "summary": "COP folder History/"
+    },
+    {
+      "ts": "2026-08-08T12:03:06+00:00",
+      "actor": "ai",
+      "action": "create_folder",
+      "path": "School/Courses/SmokeCOP/Files",
+      "summary": "COP folder Files/"
+    },
+    {
+      "ts": "2026-08-08T12:07:30+00:00",
+      "actor": "ai",
+      "action": "create_json",
+      "path": "Hayden/Relationships/People/Example.json",
+      "summary": "Created JSON from template"
+    },
+    {
+      "ts": "2026-08-08T12:07:30+00:00",
+      "actor": "ai",
+      "action": "create_folder",
+      "path": "Hayden/Preferences/Fashion",
+      "summary": "Created folder"
+    }
+  ]
+}

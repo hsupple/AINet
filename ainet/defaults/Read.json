@@ -1,0 +1,21 @@
+{
+  "_ainet": {
+    "doc": "Read.json",
+    "role": "Hot path. What the AI loads for this COP. Main write target for dormant compaction.",
+    "fact_shape": {
+      "text": "",
+      "confidence": 0.0,
+      "source_event_id": "",
+      "updated": ""
+    },
+    "edit": "known_facts and uncertainties use fact_shape objects, not bare strings."
+  },
+  "summary": "",
+  "state": "",
+  "important_context": [],
+  "recent_changes": [],
+  "active_items": [],
+  "known_facts": [],
+  "uncertainties": [],
+  "last_updated": ""
+}

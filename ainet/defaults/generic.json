@@ -1,0 +1,7 @@
+{
+  "_ainet": {
+    "doc": "generic.json",
+    "role": "Fallback when creating a JSON file that is not a named COP doc.",
+    "edit": "Optional blank shape for unknown filenames."
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "AINet",
+  "type": "project",
+  "description": "Local voice AI + rolling personal database.",
+  "created_at": "",
+  "status": "active",
+  "tags": [
+    "ainet",
+    "esp32",
+    "ollama"
+  ],
+  "related_paths": [
+    "Work"
+  ]
+}

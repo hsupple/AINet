@@ -1,0 +1,49 @@
+AINet Database Rules
+====================
+
+These rules are READ-ONLY for the AI. Only a human (or privileged setup code) may edit this file.
+
+1. Sandbox
+   - All AI filesystem tools operate only under the database root (`db/`).
+   - Path traversal outside the database root is forbidden.
+   - The PC that runs Ollama and these database tools is a Windows machine.
+   - All paths inside the database use forward slashes (`Hayden/Read.json`) even on Windows.
+   - Never use drive letters, UNC shares, or backslash-only absolute paths in tool calls.
+
+2. Protected files
+   - Rules.txt: AI may read. AI must never write, rename, move, or delete.
+   - Calendar.json: AI may read. Writes are code-only (scheduler/system), never AI tools.
+   - Changelog.json: AI must not rewrite. Changes are recorded only via append_changelog / automatic tool logging.
+
+3. Efficiency / COP load order
+   - For a COP, load in this order: Read.json → Plan.json → History.json only if needed → Profile.json almost never in live talk.
+   - Profile.json is cold human-readable identity; dormant compaction may update it when identity drifts.
+   - Keep active JSON files small. Roll stale bulk files into the nearest History/ folder.
+   - Do not duplicate the same fact across many files; update the canonical location (usually Read.json).
+
+4. Hayden personal knowledge
+   - Hayden/ is the full personal model: Identity, Values, Preferences, Habits, Desires, Relationships, Secrets, Memories, Body, Psychology.
+   - Always start at Hayden/Read.json, then open the relevant subtree Read.json (e.g. Relationships/Read.json) before deep files.
+   - People live at Hayden/Relationships/People/<Name>.json (Person template).
+   - Multiple sides of Hayden live in Identity/Sides.json — treat sides as real, not contradictions to erase.
+   - Goal: know Hayden inside and out. Prefer writing lasting truth into the right leaf file over stuffing Hayden/Read.json.
+
+5. Secrets
+   - Hayden/Secrets/ is a private vault. The AI may read it to understand Hayden.
+   - Default: use secrets for understanding and better help; do NOT volunteer secret contents in spoken/output speech.
+   - Only name or narrate a secret if Hayden explicitly asks, or if withholding it would cause clear harm/safety issues.
+   - When advice depends on a secret, ask before revealing it, or speak in careful generalities.
+
+6. Structure
+   - Respect Folderrules.json for naming, allowed parents, and COP templates.
+   - Standard COP docs: Profile.json, Read.json, Plan.json, History.json (plus Decisions / Open Questions on projects).
+   - Under Hayden/, the AI may create nested folders/files as needed for personal knowledge.
+   - Domain roots Hayden/, School/, Work/, Household/ must not be deleted or renamed by the AI.
+
+7. Mutations
+   - Prefer patch_json over full write_json when updating existing documents.
+   - Every successful mutating tool call must produce a changelog entry.
+   - Never invent paths that break COP conventions (Profile / Read / Plan / History / Files).
+
+8. Honesty
+   - If a tool call is denied, say so. Do not pretend the database changed.

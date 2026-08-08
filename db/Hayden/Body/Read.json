@@ -1,0 +1,14 @@
+{
+  "summary": "Body, health, energy, sensory.",
+  "state": "",
+  "important_context": [
+    "Health.json",
+    "Energy.json",
+    "Sensory.json"
+  ],
+  "recent_changes": [],
+  "active_items": [],
+  "known_facts": [],
+  "uncertainties": [],
+  "last_updated": ""
+}

@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "description": "Rules for AI-created folders and JSON documents under db/.",
+  "domains": ["Hayden", "School", "Work", "Household"],
+  "protected_paths": [
+    "Rules.txt",
+    "Calendar.json",
+    "Changelog.json"
+  ],
+  "immutable_roots": ["Hayden", "School", "Work", "Household"],
+  "naming": {
+    "folder": "^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$",
+    "json_file": "^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}\\.json$",
+    "forbidden_names": [
+      ".",
+      "..",
+      ".git",
+      "__pycache__",
+      "CON",
+      "PRN",
+      "AUX",
+      "NUL",
+      "COM1",
+      "COM2",
+      "COM3",
+      "COM4",
+      "COM5",
+      "COM6",
+      "COM7",
+      "COM8",
+      "COM9",
+      "LPT1",
+      "LPT2",
+      "LPT3",
+      "LPT4",
+      "LPT5",
+      "LPT6",
+      "LPT7",
+      "LPT8",
+      "LPT9"
+    ]
+  },
+  "ai_may_create": {
+    "under": [
+      "Hayden",
+      "Hayden/Identity",
+      "Hayden/Values",
+      "Hayden/Preferences",
+      "Hayden/Habits",
+      "Hayden/Desires",
+      "Hayden/Relationships",
+      "Hayden/Relationships/People",
+      "Hayden/Secrets",
+      "Hayden/Memories",
+      "Hayden/Body",
+      "Hayden/Psychology",
+      "Hayden/History",
+      "School/Courses",
+      "School/History",
+      "Work/Projects",
+      "Work/History",
+      "Household/Pantry",
+      "Household/Maintenance",
+      "Household/History"
+    ],
+    "nested_under_project": true,
+    "nested_under_hayden": true,
+    "notes": "Under Hayden/ the AI may create any depth of personal folders/files. Under Work/Projects/<Project>/ the AI may create additional subfolders when needed."
+  },
+  "hayden_map": {
+    "Identity": "Core self, sides, personality, voice, boundaries",
+    "Values": "Principles and ranked priorities",
+    "Preferences": "Likes, dislikes, tastes (Music, Food, Media, …)",
+    "Habits": "Routines, patterns, vices, disciplines",
+    "Desires": "Goals, wants, longings",
+    "Relationships": "People index + People/<Name>.json dossiers",
+    "Secrets": "Private vault — know deeply, speak carefully",
+    "Memories": "Autobiography by category, including Milestones for the most important turning points",
+    "Body": "Health, energy, sensory",
+    "Psychology": "Triggers, coping, fears, attachment, defenses"
+  },
+  "cop_templates": {
+    "course": [
+      "Profile.json",
+      "Read.json",
+      "Plan.json",
+      "History.json",
+      "History/",
+      "Files/"
+    ],
+    "project": [
+      "Profile.json",
+      "Read.json",
+      "Plan.json",
+      "Decisions.json",
+      "Open Questions.json",
+      "History.json",
+      "History/",
+      "Files/"
+    ],
+    "person": ["Person.json"]
+  },
+  "file_roles": {
+    "Profile.json": "Cold human-readable identity of this COP. Rarely loaded in live talk; dormant compaction updates when identity drifts.",
+    "Read.json": "Hot path. Load first for this COP. Main target for dormant compaction (facts, state, summary).",
+    "Plan.json": "Forward intent and next actions only. Not a fact store.",
+    "History.json": "Append-only rolling event log. Compaction reads this, then folds into Read (and sometimes Profile).",
+    "Person.json": "Dossier for one person under Hayden/Relationships/People/.",
+    "Decisions.json": "Settled decisions for a project.",
+    "Open Questions.json": "Unresolved questions.",
+    "History/": "Archived/rolled-off files; keep active JSON lean."
+  },
+  "limits": {
+    "max_json_bytes": 524288,
+    "max_path_depth": 12,
+    "max_children_per_folder": 200
+  }
+}

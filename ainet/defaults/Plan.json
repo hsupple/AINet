@@ -1,0 +1,21 @@
+{
+  "_ainet": {
+    "doc": "Plan.json",
+    "role": "Forward intent only. Not a fact store.",
+    "item_shape": {
+      "id": "",
+      "objective": "",
+      "status": "",
+      "priorities": [],
+      "next_actions": [],
+      "milestones": [],
+      "constraints": [],
+      "dependencies": [],
+      "open_questions": [],
+      "target_date": null,
+      "last_updated": ""
+    },
+    "edit": "Live files start with plans: []. item_shape documents each plan object."
+  },
+  "plans": []
+}
