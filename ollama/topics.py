@@ -25,6 +25,9 @@ def topic_root(slug: str) -> str:
 
 def ensure_topic(db: DatabaseTools, title: str) -> dict[str, Any]:
     """Create or open a research topic COP-like folder. Returns paths + slug."""
+    from ollama.research_sessions import ensure_research_scaffold
+
+    ensure_research_scaffold(db)
     slug = slugify_topic(title)
     root = topic_root(slug)
     db.create_folder(root, summary=f"Research topic: {title}")
@@ -67,7 +70,10 @@ def ensure_topic(db: DatabaseTools, title: str) -> dict[str, Any]:
     if db.paths.resolve(index_path).exists():
         index = db.read_json(index_path)["data"]
     else:
-        index = {"topics": [], "last_updated": ""}
+        index = {"topics": [], "sessions": [], "last_updated": ""}
+    if not isinstance(index, dict):
+        index = {"topics": [], "sessions": [], "last_updated": ""}
+    index.setdefault("sessions", [])
     topics = index.setdefault("topics", [])
     if not any(t.get("slug") == slug for t in topics if isinstance(t, dict)):
         topics.append({"slug": slug, "title": title, "path": root})

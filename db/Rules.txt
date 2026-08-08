@@ -37,14 +37,25 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
    - If something lasting has no clear home, SOI may use Hayden/Inbox/Captures.json. Ephemeral chatter stays out of the DB.
 
 4b. Dual AI roles
-   - AI1 OAC (Orchestrator of Conversation): live interface. READ tools only. Short-term chat lives in db/runtime/oac/.
+   - AI1 OAC (Orchestrator of Conversation): live interface. READ tools + allowlisted quiz helpers
+     (should_suggest_quiz, list_quiz_candidates, start_quiz, record_quiz_answer, get_quiz_status).
+     Short-term chat lives in db/runtime/oac/ (including quiz_active.json). OAC cannot use general DB writes.
    - Every OAC user turn is stacked onto Changelog.json as action=oac_turn with full user_text (and assistant_text) and soi_status=pending. That content stays pending until SOI files it into proper leaves or marks it discarded.
    - AI2 SOI (Slave of Information) has two phases:
        Phase 1 filing — after OAC idle soi_idle_seconds (default 45s): process pending oac_turn + unfiled Inbox; mutate DB; mark changelog entries filed/discarded.
+         Research / topic-bound turns → upsert_research_session (and complete_research_session when done)
+         under Hayden/Research/Sessions/; lasting topic facts also go to Topics/<Slug>/Notes.
          Lasting writes auto-append to that folder's Read.json read_changelog and set needs_update=true (mark_read_stale helper).
        Phase 2 Read refresh — only when filing queue is clear AND OAC idle soi_read_refresh_idle_seconds (default 600s / 10m):
          discover ONLY Read.json with needs_update=true (or pending read_changelog); skip clean Reads; rewrite those digests; then mark_read_refreshed (needs_update=false, changelog entries consumed).
-   - SOI state lives under db/runtime/soi/. OAC must not mutate the personal DB; host/runtime owns Changelog handoff writes.
+   - SOI state lives under db/runtime/soi/. OAC must not mutate the personal DB except via allowlisted quiz score tools; host/runtime owns Changelog handoff writes.
+
+4c. Research sessions + quiz
+   - Topics live under Hayden/Research/Topics/<Slug>/ (Read, Notes, History).
+   - Session entities: Hayden/Research/Sessions/<SessionId>.json — subject, length, details_covered,
+     topic link, memory_score, status open|complete. Discoverable via Research/Index.json (topics + sessions).
+   - Durable scores: Hayden/Research/Scores.json (sessions + topics). Updated by record_quiz_answer only.
+   - OAC may occasionally suggest a quiz (should_suggest_quiz throttle); on confirm, start_quiz → ask/grade → record_quiz_answer.
 
 5. Secrets
    - Hayden/Secrets/ is a private vault. The AI may read it to understand Hayden.
@@ -69,3 +80,12 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
 
 8. Honesty
    - If a tool call is denied, say so. Do not pretend the database changed.
+
+9. Internet search (Brave)
+   - Tools: web_search (Brave Search API) and web_fetch (plain-text URL fetch). Available to OAC
+     (read-only live) and SOI (full catalog). Prefer web_search for external facts; do not invent.
+   - API key: set environment variable BRAVE_API_KEY or AINET_BRAVE_API_KEY to your Brave Search
+     API subscription token (https://brave.com/search/api/). If the key is missing, web_search
+     fails clearly — create a free Brave Search API key and export it before relying on search.
+   - Windows: set via System Environment Variables, or in PowerShell for the session:
+       $env:BRAVE_API_KEY = "your_token_here"

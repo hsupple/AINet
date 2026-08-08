@@ -12,7 +12,7 @@ from ollama.client import OllamaClient
 from ollama.config import OllamaConfig
 from ollama.conversation_store import ConversationStore
 from ollama.modes import get_mode
-from ollama.modes.base import READ_TOOLS, Mode
+from ollama.modes.base import QUIZ_TOOLS, READ_TOOLS, Mode
 from ollama.router import suggest_mode
 from ollama.topics import ensure_topic, load_topic_context
 
@@ -28,7 +28,12 @@ _MUTATING = {
     "archive_to_history",
     "append_changelog",
     "capture_inbox",
+    "upsert_research_session",
+    "complete_research_session",
 }
+
+# Host-owned quiz helpers — OAC may call these even when allow_mutations=False.
+_OAC_QUIZ = set(QUIZ_TOOLS)
 
 
 class ChatSession:
@@ -86,10 +91,10 @@ class ChatSession:
         if not self.mode.tools_enabled:
             return None
         if not self.mode.allow_mutations:
-            # OAC: never advertise writes, even after get_tools
+            # OAC: read + web + quiz helpers only (never general writes)
             if self.full_tools_unlocked:
-                return tools_subset(READ_TOOLS + ("get_tools",))
-            return tools_subset(self.mode.tool_names or READ_TOOLS + ("get_tools",))
+                return tools_subset(READ_TOOLS + QUIZ_TOOLS + ("get_tools",))
+            return tools_subset(self.mode.tool_names or READ_TOOLS + QUIZ_TOOLS + ("get_tools",))
         if self.full_tools_unlocked or self.mode.tool_names is None:
             return tools_subset(None)
         return tools_subset(self.mode.tool_names)
@@ -245,18 +250,22 @@ class ChatSession:
                 read_only=not self.mode.allow_mutations,
             )
 
-        if not self.mode.allow_mutations and name in _MUTATING:
-            return {
-                "ok": False,
-                "error": (
-                    "OAC cannot mutate the database. "
-                    "SOI will file lasting info from the changelog after idle."
-                ),
-            }
-
-        if (
-            self.mode.allow_mutations
-            and not self.full_tools_unlocked
+        if not self.mode.allow_mutations:
+            allowed = set(READ_TOOLS) | _OAC_QUIZ | {"get_tools", "getTools"}
+            if self.mode.tool_names:
+                allowed |= set(self.mode.tool_names)
+            if name not in allowed or name in _MUTATING:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"OAC cannot use tool '{name}'. "
+                        "Allowed: read/web + quiz helpers (should_suggest_quiz, "
+                        "list_quiz_candidates, start_quiz, record_quiz_answer, get_quiz_status). "
+                        "SOI files lasting DB writes from the changelog after idle."
+                    ),
+                }
+        elif (
+            not self.full_tools_unlocked
             and self.mode.tool_names is not None
             and name not in self.mode.tool_names
             and name not in {"get_tools", "getTools"}

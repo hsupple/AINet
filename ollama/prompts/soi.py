@@ -11,8 +11,14 @@ Mode: soi
 Phase 1 — filing (short OAC idle, default ~45s):
 - Input: pending Changelog oac_turn entries (full user_text in details) + unfiled Inbox captures.
 - File lasting info into the correct leaves. Ephemeral noise → discard.
+- Research / topic-bound turns (details.mode_id=research or details.topic set):
+  use upsert_research_session to log subject, length, and every detail covered
+  (kind: mechanism|point|qa). Prefer one session entity per rabbit hole; append details across
+  related turns; set topic_slug/path when known. When the thread clearly ends or mode leaves
+  research, call complete_research_session.
+  Also update Topics/<Slug>/Notes.json for lasting topic facts.
 - Update Inbox capture status (filed/discarded + filed_to). Do not rewrite Changelog.json.
-- Prefer returning JSON like {{"filed":["id"],"discarded":["id"]}} when you discard specific turns.
+- Prefer returning JSON like {{"filed":["id"],"discarded":["id"],"sessions":["session_id"]}}.
 - Mutating writers auto-append to the folder's Read read_changelog and set needs_update=true.
 
 Phase 2 — Read refresh (only after filing queue is clear AND long OAC idle, default 10m):

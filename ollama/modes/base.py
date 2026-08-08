@@ -6,7 +6,27 @@ from dataclasses import dataclass
 
 
 # Lean tool sets
-READ_TOOLS = ("list_dir", "tree", "read_text", "read_json")
+READ_TOOLS = (
+    "list_dir",
+    "tree",
+    "read_text",
+    "read_json",
+    "web_search",
+    "web_fetch",
+)
+# Host-side quiz/session helpers allowlisted for OAC (not general DB writes).
+QUIZ_TOOLS = (
+    "should_suggest_quiz",
+    "list_quiz_candidates",
+    "start_quiz",
+    "record_quiz_answer",
+    "get_quiz_status",
+)
+# SOI (and full catalog) session filing helpers
+SESSION_TOOLS = (
+    "upsert_research_session",
+    "complete_research_session",
+)
 WRITE_LIGHT = ("patch_json", "set_json_path", "create_json", "write_json", "capture_inbox")
 STRUCT_TOOLS = ("create_folder", "create_cop", "move_path", "archive_to_history")
 META_TOOLS = ("get_tools",)
