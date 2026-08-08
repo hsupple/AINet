@@ -30,6 +30,8 @@ HAYDEN_DOCUMENTS = (
     "Person.json",
     "SecretCategory.json",
     "Sides.json",
+    "Captures.json",
+    "MilestoneLog.json",
 )
 
 
@@ -89,6 +91,14 @@ def load_default_for_path(relative_path: str) -> dict[str, Any] | list[Any] | An
         and name == "Log.json"
     ):
         return load_default("MilestoneLog.json")
+
+    if (
+        len(parts) == 3
+        and parts[0] == "Hayden"
+        and parts[1] == "Inbox"
+        and name == "Captures.json"
+    ):
+        return load_default("Captures.json")
 
     return load_default(name)
 

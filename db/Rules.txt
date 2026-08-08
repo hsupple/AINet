@@ -18,15 +18,33 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
 3. Efficiency / COP load order
    - For a COP, load in this order: Read.json → Plan.json → History.json only if needed → Profile.json almost never in live talk.
    - Profile.json is cold human-readable identity; dormant compaction may update it when identity drifts.
+   - Read.json is a SHORT hot index/summary surface only — never a dump of the folder. OAC deep-dives into sibling leaves via tools when more detail is needed.
+   - Read belongs: short summary + state; small priority lists (important_context, active_items, recent_changes, known_facts, uncertainties); path pointers to deeper files; needs_update + read_changelog freshness metadata.
+   - Read does not belong: long narratives, duplicated leaf content, bulk history, full folder dumps.
+   - Practical caps (enforced on write): summary≤400 chars, state≤160, item strings≤180 chars;
+     important_context≤12, active_items≤10, recent_changes≤8, known_facts≤12, uncertainties≤8; whole Read ≤~12KB.
+     Oversized Writes are auto-trimmed (note in read_changelog) or rejected if still too large.
+   - When refreshing a Read, compress/roll excess into the correct leaf files or History; prefer pointers over inlining.
    - Keep active JSON files small. Roll stale bulk files into the nearest History/ folder.
-   - Do not duplicate the same fact across many files; update the canonical location (usually Read.json).
+   - Do not duplicate the same fact across many files; update the canonical location (usually a leaf; Read only holds a short digest/pointer).
 
 4. Hayden personal knowledge
-   - Hayden/ is the full personal model: Identity, Values, Preferences, Habits, Desires, Relationships, Secrets, Memories, Body, Psychology.
+   - Hayden/ is the full personal model: Identity, Values, Preferences, Habits, Desires, Relationships, Secrets, Memories, Body, Psychology, Research, Inbox.
    - Always start at Hayden/Read.json, then open the relevant subtree Read.json (e.g. Relationships/Read.json) before deep files.
    - People live at Hayden/Relationships/People/<Name>.json (Person template).
    - Multiple sides of Hayden live in Identity/Sides.json — treat sides as real, not contradictions to erase.
    - Goal: know Hayden inside and out. Prefer writing lasting truth into the right leaf file over stuffing Hayden/Read.json.
+   - If something lasting has no clear home, SOI may use Hayden/Inbox/Captures.json. Ephemeral chatter stays out of the DB.
+
+4b. Dual AI roles
+   - AI1 OAC (Orchestrator of Conversation): live interface. READ tools only. Short-term chat lives in db/runtime/oac/.
+   - Every OAC user turn is stacked onto Changelog.json as action=oac_turn with full user_text (and assistant_text) and soi_status=pending. That content stays pending until SOI files it into proper leaves or marks it discarded.
+   - AI2 SOI (Slave of Information) has two phases:
+       Phase 1 filing — after OAC idle soi_idle_seconds (default 45s): process pending oac_turn + unfiled Inbox; mutate DB; mark changelog entries filed/discarded.
+         Lasting writes auto-append to that folder's Read.json read_changelog and set needs_update=true (mark_read_stale helper).
+       Phase 2 Read refresh — only when filing queue is clear AND OAC idle soi_read_refresh_idle_seconds (default 600s / 10m):
+         discover ONLY Read.json with needs_update=true (or pending read_changelog); skip clean Reads; rewrite those digests; then mark_read_refreshed (needs_update=false, changelog entries consumed).
+   - SOI state lives under db/runtime/soi/. OAC must not mutate the personal DB; host/runtime owns Changelog handoff writes.
 
 5. Secrets
    - Hayden/Secrets/ is a private vault. The AI may read it to understand Hayden.
@@ -37,12 +55,16 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
 6. Structure
    - Respect Folderrules.json for naming, allowed parents, and COP templates.
    - Standard COP docs: Profile.json, Read.json, Plan.json, History.json (plus Decisions / Open Questions on projects).
-   - Under Hayden/, the AI may create nested folders/files as needed for personal knowledge.
+   - Under Hayden/, SOI may create nested folders/files as needed for personal knowledge.
    - Domain roots Hayden/, School/, Work/, Household/ must not be deleted or renamed by the AI.
+   - db/runtime/ is host-owned short-term state (OAC sessions, SOI cursor).
 
 7. Mutations
    - Prefer patch_json over full write_json when updating existing documents.
+   - Prefer capture_inbox for unsorted lasting scraps (SOI).
    - Every successful mutating tool call must produce a changelog entry.
+   - Lasting content writes auto-mark the nearest folder Read.json stale (needs_update + read_changelog). Writing Read.json itself does not re-mark stale.
+   - After SOI Read refresh, call mark_read_refreshed (host also clears remaining stale gates after a successful domain run).
    - Never invent paths that break COP conventions (Profile / Read / Plan / History / Files).
 
 8. Honesty

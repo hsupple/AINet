@@ -1,0 +1,56 @@
+# --- AINet: code & schema push; living personal DB stays local ---
+
+# Python / OS junk
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+.env
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.tmp
+.ainet-*.tmp
+.changelog-*.tmp
+
+# Runtime / machine-local control files (grow or are code-owned)
+db/Changelog.json
+db/Calendar.json
+db/runtime/
+!db/runtime/.gitkeep
+!db/runtime/oac/.gitkeep
+!db/runtime/oac/sessions/.gitkeep
+!db/runtime/soi/.gitkeep
+
+# Rolling history — local only (re-seeded empty by tools/COP create)
+db/**/History.json
+db/**/History/**
+!db/**/History/.gitkeep
+
+# Personal vaults & dossiers — never push
+db/Hayden/Secrets/Personal.json
+db/Hayden/Secrets/Family.json
+db/Hayden/Secrets/Relational.json
+db/Hayden/Secrets/Sexual.json
+db/Hayden/Secrets/Dangerous.json
+db/Hayden/Secrets/Other.json
+db/Hayden/Relationships/People/**
+!db/Hayden/Relationships/People/.gitkeep
+
+# Preference / memory leaf dumps that get personal fast
+db/Hayden/Preferences/Music/**
+!db/Hayden/Preferences/Music/.gitkeep
+db/Hayden/Memories/Milestones/Log.json
+db/Hayden/Memories/Childhood/**
+db/Hayden/Memories/Formative/**
+db/Hayden/Memories/Recent/**
+db/Hayden/Memories/Wounds/**
+db/Hayden/Memories/Wins/**
+!db/Hayden/Memories/**/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp

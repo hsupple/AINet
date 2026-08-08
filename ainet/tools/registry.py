@@ -239,7 +239,161 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_inbox",
+            "description": (
+                "Append a lasting but unsorted scrap to Hayden/Inbox/Captures.json. "
+                "Use when info matters but has no clear home yet. Do not use for ephemeral chatter."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "suggested_home": {
+                        "type": "string",
+                        "description": "Optional guess like Preferences/Food.json or Relationships/People/Jake.json",
+                    },
+                    "source": {"type": "string", "default": "conversation"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_read_stale",
+            "description": (
+                "Append to the nearest folder Read.json read_changelog and set needs_update=true. "
+                "Mutating writers usually do this automatically; call explicitly if needed after filing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "folder_or_path": {
+                        "type": "string",
+                        "description": "Folder or file path whose nearest Read should be marked stale",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "Short note of what changed (kept in read_changelog)",
+                    },
+                    "source_path": {
+                        "type": "string",
+                        "description": "Optional explicit source path for the changelog entry",
+                    },
+                },
+                "required": ["folder_or_path", "summary"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_read_refreshed",
+            "description": (
+                "After a successful Read.json rewrite: set needs_update=false and mark pending "
+                "read_changelog entries consumed. Pass the Read.json path or its folder."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "read_path": {
+                        "type": "string",
+                        "description": "Read.json path or containing folder",
+                    }
+                },
+                "required": ["read_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_stale_reads",
+            "description": (
+                "List Read.json paths with needs_update=true or pending read_changelog entries "
+                "(SOI Phase 2 refresh candidates)."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_tools",
+            "description": (
+                "List the full AINet database tool catalog (all operational tools). "
+                "Call this when you need a tool that is not in your current lean set; "
+                "after calling, the full catalog is unlocked for later tool calls."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "detail": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "If true, include parameter schemas.",
+                    }
+                },
+            },
+        },
+    },
 ]
+
+
+def catalog_tools(
+    *,
+    detail: bool = True,
+    include_meta: bool = False,
+    read_only: bool = False,
+) -> dict[str, Any]:
+    """Return the tool catalog.
+
+    read_only=True → OAC view (list/tree/read only).
+    Otherwise → all operational DB tools (excludes get_tools unless include_meta).
+    """
+    read_names = {"list_dir", "tree", "read_text", "read_json"}
+    tools = []
+    for spec in TOOL_DEFINITIONS:
+        fn = spec.get("function") or {}
+        name = fn.get("name")
+        if not name or (name == "get_tools" and not include_meta):
+            continue
+        if read_only and name not in read_names:
+            continue
+        item: dict[str, Any] = {
+            "name": name,
+            "description": fn.get("description", ""),
+        }
+        if detail:
+            item["parameters"] = fn.get("parameters") or {}
+        tools.append(item)
+    return {
+        "ok": True,
+        "count": len(tools),
+        "read_only": read_only,
+        "tools": tools,
+        "unlocks_full_access": not read_only,
+        "note": (
+            "Read-only catalog for OAC (no mutations)."
+            if read_only
+            else "Full tool access unlocked for subsequent calls this session."
+        ),
+    }
+
+
+def tools_subset(names: tuple[str, ...] | list[str] | None = None) -> list[dict[str, Any]]:
+    """Return Ollama tool defs; None means the full catalog. Always includes get_tools when filtered."""
+    if names is None:
+        return list(TOOL_DEFINITIONS)
+    wanted = set(names)
+    wanted.add("get_tools")
+    return [t for t in TOOL_DEFINITIONS if t.get("function", {}).get("name") in wanted]
 
 
 def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
@@ -278,6 +432,29 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
         ),
         "append_changelog": lambda **kw: db.append_changelog(
             kw["action"], kw["path"], kw["summary"], kw.get("details")
+        ),
+        "capture_inbox": lambda **kw: db.capture_inbox(
+            kw["text"],
+            tags=kw.get("tags"),
+            suggested_home=kw.get("suggested_home", ""),
+            source=kw.get("source", "conversation"),
+            summary=kw.get("summary"),
+        ),
+        "mark_read_stale": lambda **kw: db.mark_read_stale(
+            kw["folder_or_path"],
+            kw["summary"],
+            source_path=kw.get("source_path"),
+        ),
+        "mark_read_refreshed": lambda **kw: db.mark_read_refreshed(kw["read_path"]),
+        "list_stale_reads": lambda **kw: db.list_stale_reads(),
+        "get_tools": lambda **kw: catalog_tools(
+            detail=bool(kw.get("detail", True)),
+            read_only=bool(kw.get("read_only", False)),
+        ),
+        # camelCase alias some models emit
+        "getTools": lambda **kw: catalog_tools(
+            detail=bool(kw.get("detail", True)),
+            read_only=bool(kw.get("read_only", False)),
         ),
     }
 

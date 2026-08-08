@@ -1,0 +1,17 @@
+{
+  "summary": "Deep research threads. Each topic lives under Topics/<Slug>/ (Read, Notes, History).",
+  "state": "",
+  "important_context": [
+    "Index.json",
+    "Topics/"
+  ],
+  "recent_changes": [],
+  "active_items": [
+    "Open or create a topic before a long rabbit hole"
+  ],
+  "known_facts": [],
+  "uncertainties": [],
+  "last_updated": "",
+  "needs_update": false,
+  "read_changelog": []
+}

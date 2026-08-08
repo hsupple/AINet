@@ -10,5 +10,7 @@
   "active_items": [],
   "known_facts": [],
   "uncertainties": [],
-  "last_updated": ""
+  "last_updated": "",
+  "needs_update": false,
+  "read_changelog": []
 }

@@ -1,0 +1,18 @@
+{
+  "captures": [
+    {
+      "id": "ba8975f98d05",
+      "text": "The coffee shop near campus has the good outlet table",
+      "captured_at": "2026-08-08T17:08:42+00:00",
+      "source": "conversation",
+      "tags": [
+        "places",
+        "campus"
+      ],
+      "suggested_home": "Preferences/Lifestyle.json",
+      "status": "unfiled",
+      "filed_to": ""
+    }
+  ],
+  "last_updated": "2026-08-08T17:08:42+00:00"
+}

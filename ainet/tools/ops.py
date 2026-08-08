@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ainet.defaults import load_default, load_default_for_path
-from ainet.tools import changelog
+from ainet.tools import changelog, readlog
 from ainet.tools.fsutil import atomic_write_bytes
 from ainet.tools.paths import DbPaths, PathError, normalize_relpath
 from ainet.tools.permissions import Action, PermissionError_, Permissions
@@ -126,6 +126,59 @@ class DatabaseTools:
             "data": load_default(filename),
         }
 
+    def capture_inbox(
+        self,
+        text: str,
+        *,
+        tags: list[str] | None = None,
+        suggested_home: str = "",
+        source: str = "conversation",
+        summary: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one unsorted scrap to Hayden/Inbox/Captures.json."""
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        path = "Hayden/Inbox/Captures.json"
+        cleaned = (text or "").strip()
+        if not cleaned:
+            raise ValueError("capture_inbox requires non-empty text")
+
+        if not self.paths.resolve(path).exists():
+            self.write_json(
+                path,
+                load_default_for_path(path),
+                create=True,
+                summary="Seed Inbox Captures.json",
+            )
+
+        current = self.read_json(path)["data"]
+        if not isinstance(current, dict):
+            raise ValueError("Captures.json must be a JSON object")
+        captures = current.setdefault("captures", [])
+        if not isinstance(captures, list):
+            raise ValueError("Captures.json 'captures' must be a list")
+
+        entry = {
+            "id": uuid4().hex[:12],
+            "text": cleaned,
+            "captured_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "source": source or "conversation",
+            "tags": list(tags or []),
+            "suggested_home": suggested_home or "",
+            "status": "unfiled",
+            "filed_to": "",
+        }
+        captures.append(entry)
+        current["last_updated"] = entry["captured_at"]
+        self.write_json(
+            path,
+            current,
+            create=False,
+            summary=summary or f"Inbox capture: {cleaned[:80]}",
+        )
+        return {"ok": True, "path": path, "capture": entry}
+
     # ---- writes ------------------------------------------------------------
 
     def write_json(
@@ -148,6 +201,10 @@ class DatabaseTools:
         if norm.casefold() == "folderrules.json":
             self.permissions.assert_can(Action.UPDATE_FOLDERRULES, path)
 
+        trim_notes: list[str] = []
+        if readlog.is_read_json_path(norm):
+            data, trim_notes = readlog.prepare_read_payload(data)
+
         payload = self._encode_json(data)
         target = self.paths.resolve(path)
         if not exists:
@@ -165,7 +222,19 @@ class DatabaseTools:
             path=path,
             summary=summary or ("Updated JSON" if exists else "Created JSON"),
         )
-        return {"ok": True, "path": path, "created": not exists, "changelog": entry}
+        read_touch = self._maybe_mark_read_stale(
+            path, summary=summary or ("Updated JSON" if exists else "Created JSON")
+        )
+        result: dict[str, Any] = {
+            "ok": True,
+            "path": path,
+            "created": not exists,
+            "changelog": entry,
+            "read_stale": read_touch,
+        }
+        if trim_notes:
+            result["read_trimmed"] = trim_notes
+        return result
 
     def patch_json(
         self,
@@ -183,6 +252,9 @@ class DatabaseTools:
             raise ValueError("patch_json requires the file and patch to be JSON objects.")
 
         merged = _deep_merge(current, patch)
+        trim_notes: list[str] = []
+        if readlog.is_read_json_path(path):
+            merged, trim_notes = readlog.prepare_read_payload(merged)
         payload = self._encode_json(merged)
         atomic_write_bytes(target, payload)
         if normalize_relpath(path).casefold() == "folderrules.json":
@@ -195,7 +267,17 @@ class DatabaseTools:
             summary=summary or "Patched JSON",
             details={"keys": sorted(patch.keys())},
         )
-        return {"ok": True, "path": path, "data": merged, "changelog": entry}
+        read_touch = self._maybe_mark_read_stale(path, summary=summary or "Patched JSON")
+        result = {
+            "ok": True,
+            "path": path,
+            "data": merged,
+            "changelog": entry,
+            "read_stale": read_touch,
+        }
+        if trim_notes:
+            result["read_trimmed"] = trim_notes
+        return result
 
     def set_json_path(
         self,
@@ -227,6 +309,12 @@ class DatabaseTools:
             raise ValueError("Cannot set key on non-object parent")
         cursor[keys[-1]] = value
 
+        trim_notes: list[str] = []
+        if readlog.is_read_json_path(path):
+            if not isinstance(current, dict):
+                raise ValueError("Read.json must be a JSON object")
+            current, trim_notes = readlog.prepare_read_payload(current)
+
         payload = self._encode_json(current)
         atomic_write_bytes(target, payload)
         entry = changelog.append_entry(
@@ -236,7 +324,17 @@ class DatabaseTools:
             summary=summary or f"Set {json_path}",
             details={"json_path": json_path},
         )
-        return {"ok": True, "path": path, "json_path": json_path, "changelog": entry}
+        read_touch = self._maybe_mark_read_stale(path, summary=summary or f"Set {json_path}")
+        result = {
+            "ok": True,
+            "path": path,
+            "json_path": json_path,
+            "changelog": entry,
+            "read_stale": read_touch,
+        }
+        if trim_notes:
+            result["read_trimmed"] = trim_notes
+        return result
 
     def create_folder(self, path: str, *, summary: str | None = None) -> dict[str, Any]:
         self.permissions.assert_can(Action.CREATE_DIR, path)
@@ -255,7 +353,17 @@ class DatabaseTools:
             path=path,
             summary=summary or "Created folder",
         )
-        return {"ok": True, "path": path, "created": True, "changelog": entry}
+        # Mark nearest parent Read (new empty folders usually have no own Read yet).
+        read_touch = self._maybe_mark_read_stale(
+            path, summary=summary or "Created folder", folder_hint=True
+        )
+        return {
+            "ok": True,
+            "path": path,
+            "created": True,
+            "changelog": entry,
+            "read_stale": read_touch,
+        }
 
     def create_cop(
         self,
@@ -322,7 +430,22 @@ class DatabaseTools:
             summary=summary or f"Moved {src} -> {dest}",
             details={"from": src, "to": dest},
         )
-        return {"ok": True, "from": src, "to": dest, "changelog": entry}
+        note = summary or f"Moved {src} -> {dest}"
+        read_touch = [
+            t
+            for t in (
+                self._maybe_mark_read_stale(src, summary=note),
+                self._maybe_mark_read_stale(dest, summary=note),
+            )
+            if t
+        ]
+        return {
+            "ok": True,
+            "from": src,
+            "to": dest,
+            "changelog": entry,
+            "read_stale": read_touch or None,
+        }
 
     def archive_to_history(
         self,
@@ -361,7 +484,104 @@ class DatabaseTools:
         )
         return {"ok": True, "changelog": entry}
 
+    def mark_read_stale(
+        self,
+        folder_or_path: str,
+        summary: str,
+        *,
+        source_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Append to the nearest Read.json read_changelog and set needs_update=true.
+
+        Call after lasting content lands in a folder (SOI filing, captures, etc.).
+        Mutating writers already invoke this automatically for non-Read paths.
+        """
+        read_path = readlog.find_nearest_read_path(self.paths, folder_or_path)
+        if not read_path:
+            return {
+                "ok": True,
+                "marked": False,
+                "reason": "no Read.json found for path",
+                "path": folder_or_path,
+            }
+        self.permissions.assert_can(Action.WRITE, read_path)
+        data = readlog.load_read_doc(self.paths, read_path)
+        entry = readlog.append_read_log_entry(
+            data,
+            summary=summary,
+            source_path=source_path if source_path is not None else normalize_relpath(folder_or_path),
+        )
+        readlog.save_read_doc(self.paths, read_path, data)
+        return {
+            "ok": True,
+            "marked": True,
+            "read_path": read_path,
+            "entry": entry,
+            "needs_update": True,
+        }
+
+    def mark_read_refreshed(self, read_path: str) -> dict[str, Any]:
+        """After a successful Read rewrite: needs_update=false, consume pending log entries."""
+        norm = normalize_relpath(read_path)
+        if not readlog.is_read_json_path(norm):
+            candidate = f"{norm.rstrip('/')}/Read.json"
+            if self.paths.resolve(candidate).is_file():
+                norm = candidate
+            else:
+                raise PathError(f"No Read.json for: {read_path}")
+        self.permissions.assert_can(Action.WRITE, norm)
+        data = readlog.load_read_doc(self.paths, norm)
+        consumed = readlog.consume_read_log(data)
+        readlog.save_read_doc(self.paths, norm, data)
+        return {
+            "ok": True,
+            "read_path": norm,
+            "needs_update": False,
+            "consumed": consumed,
+        }
+
+    def list_stale_reads(self) -> dict[str, Any]:
+        """Discover Read.json paths with needs_update or pending read_changelog entries."""
+        root = self.paths.root
+        stale: list[str] = []
+        for path in sorted(root.rglob("Read.json")):
+            if "runtime" in path.parts:
+                continue
+            try:
+                rel = path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            try:
+                with path.open("r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except (json.JSONDecodeError, OSError):
+                continue
+            if readlog.read_needs_refresh(data):
+                stale.append(rel)
+        return {"ok": True, "count": len(stale), "paths": stale}
+
     # ---- internals ---------------------------------------------------------
+
+    def _maybe_mark_read_stale(
+        self,
+        path: str,
+        *,
+        summary: str,
+        folder_hint: bool = False,
+    ) -> dict[str, Any] | None:
+        if readlog.should_skip_stale_mark(path):
+            return None
+        # For brand-new folders, start search from parent so we don't require a Read inside.
+        look = path
+        if folder_hint:
+            parent = str(PurePosixPath(normalize_relpath(path)).parent)
+            if parent and parent != ".":
+                look = parent
+        try:
+            result = self.mark_read_stale(look, summary, source_path=normalize_relpath(path))
+        except (PermissionError_, PathError, ValueError, OSError):
+            return None
+        return result if result.get("marked") else None
 
     def _encode_json(self, data: Any) -> bytes:
         try:

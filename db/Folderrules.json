@@ -54,6 +54,8 @@
       "Hayden/Memories",
       "Hayden/Body",
       "Hayden/Psychology",
+      "Hayden/Inbox",
+      "Hayden/Research",
       "Hayden/History",
       "School/Courses",
       "School/History",
@@ -77,7 +79,9 @@
     "Secrets": "Private vault — know deeply, speak carefully",
     "Memories": "Autobiography by category, including Milestones for the most important turning points",
     "Body": "Health, energy, sensory",
-    "Psychology": "Triggers, coping, fears, attachment, defenses"
+    "Psychology": "Triggers, coping, fears, attachment, defenses",
+    "Research": "Deep topic threads under Topics/<Slug>/ (Read, Notes, History)",
+    "Inbox": "Unsorted lasting scraps in Captures.json — file later via dormant"
   },
   "cop_templates": {
     "course": [
@@ -102,7 +106,7 @@
   },
   "file_roles": {
     "Profile.json": "Cold human-readable identity of this COP. Rarely loaded in live talk; dormant compaction updates when identity drifts.",
-    "Read.json": "Hot path. Load first for this COP. Main target for dormant compaction (facts, state, summary).",
+    "Read.json": "SHORT hot index only. Load first for this COP. Holds summary/state, small priority lists, path pointers, and needs_update+read_changelog. Never dump the folder here — detail lives in sibling leaves; OAC deep-dives via tools. Main target for SOI Read-refresh compaction.",
     "Plan.json": "Forward intent and next actions only. Not a fact store.",
     "History.json": "Append-only rolling event log. Compaction reads this, then folds into Read (and sometimes Profile).",
     "Person.json": "Dossier for one person under Hayden/Relationships/People/.",

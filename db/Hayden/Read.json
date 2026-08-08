@@ -11,17 +11,23 @@
     "Secrets/ — private vault; know deeply, speak carefully",
     "Memories/ — autobiography by category (Milestones = most important turning points)",
     "Body/ — health, energy, sensory",
-    "Psychology/ — triggers, coping, fears, attachment"
+    "Psychology/ — triggers, coping, fears, attachment",
+    "Research/ — deep topic rabbit holes under Topics/",
+    "Inbox/ — unsorted lasting scraps (Captures.json) when nothing else fits"
   ],
   "recent_changes": [
-    "Expanded Hayden/ into full personal ontology"
+    "Expanded Hayden/ into full personal ontology",
+    "Added Inbox/ for miscellaneous captures"
   ],
   "active_items": [
     "Fill Identity/Core.json and Identity/Sides.json",
     "Add people under Relationships/People/",
-    "Populate Secrets/ as trust builds"
+    "Populate Secrets/ as trust builds",
+    "File or discard unfiled Inbox captures over time"
   ],
   "known_facts": [],
   "uncertainties": [],
-  "last_updated": ""
+  "last_updated": "",
+  "needs_update": false,
+  "read_changelog": []
 }
