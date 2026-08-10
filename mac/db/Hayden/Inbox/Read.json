@@ -1,0 +1,16 @@
+{
+  "summary": "Unsorted lasting scraps. If it matters but has no clear home yet, capture here — do not stuff Hayden/Read.json.",
+  "state": "active",
+  "important_context": [
+    "Captures.json — queue of unfiled scraps for SOI to place later"
+  ],
+  "recent_changes": [],
+  "active_items": [
+    "File or discard unfiled captures"
+  ],
+  "known_facts": [],
+  "uncertainties": [],
+  "last_updated": "",
+  "needs_update": false,
+  "read_changelog": []
+}

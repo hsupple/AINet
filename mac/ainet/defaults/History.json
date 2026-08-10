@@ -1,0 +1,19 @@
+{
+  "_ainet": {
+    "doc": "History.json",
+    "role": "Append-only event log. Compaction reads this, then folds signal into Read (and sometimes Profile). Bulk archives go under History/.",
+    "item_shape": {
+      "id": "",
+      "timestamp": "",
+      "type": "",
+      "content": "",
+      "source": "",
+      "importance": 0.0,
+      "confidence": 0.0,
+      "tags": [],
+      "related_entities": []
+    },
+    "edit": "Live files start with events: []. item_shape documents each event object."
+  },
+  "events": []
+}

@@ -1,0 +1,48 @@
+{
+  "_ainet": {
+    "doc": "Read.json",
+    "role": "Hot index only. Short digest for this COP so AIs can orient fast; deep detail lives in sibling leaves. OAC deep-dives via tools when needed.",
+    "belongs": [
+      "summary (short)",
+      "state (short)",
+      "small priority lists: important_context, active_items, recent_changes, known_facts, uncertainties",
+      "path pointers to deeper files (e.g. Identity/Core.json) — never inline long bodies",
+      "needs_update + read_changelog (freshness metadata for SOI Phase 2)"
+    ],
+    "does_not_belong": [
+      "full folder dumps",
+      "long narratives",
+      "duplicated leaf content",
+      "bulk history"
+    ],
+    "limits": {
+      "summary_chars": 400,
+      "state_chars": 160,
+      "item_chars": 180,
+      "important_context": 12,
+      "active_items": 10,
+      "recent_changes": 8,
+      "known_facts": 12,
+      "uncertainties": 8,
+      "max_bytes": 12288
+    },
+    "fact_shape": {
+      "text": "",
+      "confidence": 0.0,
+      "source_event_id": "",
+      "updated": ""
+    },
+    "edit": "known_facts and uncertainties use fact_shape objects, not bare strings. Prefer path pointers over long fact text.",
+    "freshness": "needs_update + read_changelog gate SOI Phase 2. Writers auto-call mark_read_stale; refresh only when needs_update or pending changelog entries exist. After rewrite, mark_read_refreshed clears the gate."
+  },
+  "summary": "",
+  "state": "",
+  "important_context": [],
+  "recent_changes": [],
+  "active_items": [],
+  "known_facts": [],
+  "uncertainties": [],
+  "last_updated": "",
+  "needs_update": false,
+  "read_changelog": []
+}

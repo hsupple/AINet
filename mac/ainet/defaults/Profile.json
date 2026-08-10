@@ -1,0 +1,14 @@
+{
+  "_ainet": {
+    "doc": "Profile.json",
+    "role": "Cold, human-readable identity of this COP. Rarely loaded in live talk. Dormant compaction updates only when identity drifts.",
+    "edit": "Seed shape for every new Profile.json. _ainet is stripped on create."
+  },
+  "name": "",
+  "type": "",
+  "description": "",
+  "created_at": "",
+  "status": "",
+  "tags": [],
+  "related_paths": []
+}

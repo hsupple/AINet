@@ -1,0 +1,20 @@
+{
+  "summary": "Likes, dislikes, tastes. Load only the relevant leaf.",
+  "state": "",
+  "important_context": [
+    "Likes.json",
+    "Dislikes.json",
+    "Music/",
+    "Food.json",
+    "Media.json",
+    "Aesthetic.json",
+    "Lifestyle.json"
+  ],
+  "recent_changes": [],
+  "active_items": [],
+  "known_facts": [],
+  "uncertainties": [],
+  "last_updated": "",
+  "needs_update": false,
+  "read_changelog": []
+}

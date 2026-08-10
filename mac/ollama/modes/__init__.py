@@ -1,0 +1,38 @@
+"""Mode registry."""
+
+from __future__ import annotations
+
+from ollama.modes import companion, conversation, dormant, planner, research, soi
+from ollama.modes.base import Mode
+
+_MODES: dict[str, Mode] = {
+    companion.MODE.id: companion.MODE,
+    conversation.MODE.id: conversation.MODE,
+    research.MODE.id: research.MODE,
+    planner.MODE.id: planner.MODE,
+    soi.MODE.id: soi.MODE,
+    # alias
+    "dormant": dormant.MODE,
+}
+
+DEFAULT_MODE_ID = companion.MODE.id
+
+
+def get_mode(mode_id: str) -> Mode:
+    key = mode_id.strip().lower()
+    if key not in _MODES:
+        known = ", ".join(sorted(set(_MODES)))
+        raise KeyError(f"Unknown mode '{mode_id}'. Known modes: {known}")
+    return _MODES[key]
+
+
+def list_modes() -> list[Mode]:
+    # Deduplicate alias
+    seen: set[str] = set()
+    out: list[Mode] = []
+    for mode in (_MODES[k] for k in sorted(_MODES)):
+        if mode.id in seen:
+            continue
+        seen.add(mode.id)
+        out.append(mode)
+    return out

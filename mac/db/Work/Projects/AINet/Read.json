@@ -1,0 +1,15 @@
+{
+  "summary": "AINet project hot surface.",
+  "state": "",
+  "important_context": [
+    "ESP32 mic/speaker pipeline",
+    "Mac runs Ollama + ainet tools"
+  ],
+  "recent_changes": [],
+  "active_items": [],
+  "known_facts": [],
+  "uncertainties": [],
+  "last_updated": "",
+  "needs_update": false,
+  "read_changelog": []
+}

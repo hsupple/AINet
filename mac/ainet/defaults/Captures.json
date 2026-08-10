@@ -1,0 +1,18 @@
+{
+  "_ainet": {
+    "doc": "Captures.json",
+    "role": "Unsorted lasting scraps that do not yet have a clear home. Dormant files them later.",
+    "item_shape": {
+      "id": "",
+      "text": "",
+      "captured_at": "",
+      "source": "conversation",
+      "tags": [],
+      "suggested_home": "",
+      "status": "unfiled",
+      "filed_to": ""
+    }
+  },
+  "captures": [],
+  "last_updated": ""
+}

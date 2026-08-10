@@ -1,0 +1,91 @@
+AINet Database Rules
+====================
+
+These rules are READ-ONLY for the AI. Only a human (or privileged setup code) may edit this file.
+
+1. Sandbox
+   - All AI filesystem tools operate only under the database root (`db/`).
+   - Path traversal outside the database root is forbidden.
+   - The Mac that runs Ollama and these database tools is this machine.
+   - All paths inside the database use forward slashes (`Hayden/Read.json`) on macOS.
+   - Never use absolute filesystem paths or parent traversal (..) in tool calls. DB paths are always relative with forward slashes.
+
+2. Protected files
+   - Rules.txt: AI may read. AI must never write, rename, move, or delete.
+   - Calendar.json: AI may read. Writes are code-only (scheduler/system), never AI tools.
+   - Changelog.json: AI must not rewrite. Changes are recorded only via append_changelog / automatic tool logging.
+
+3. Efficiency / COP load order
+   - For a COP, load in this order: Read.json → Plan.json → History.json only if needed → Profile.json almost never in live talk.
+   - Profile.json is cold human-readable identity; dormant compaction may update it when identity drifts.
+   - Read.json is a SHORT hot index/summary surface only — never a dump of the folder. OAC deep-dives into sibling leaves via tools when more detail is needed.
+   - Read belongs: short summary + state; small priority lists (important_context, active_items, recent_changes, known_facts, uncertainties); path pointers to deeper files; needs_update + read_changelog freshness metadata.
+   - Read does not belong: long narratives, duplicated leaf content, bulk history, full folder dumps.
+   - Practical caps (enforced on write): summary≤400 chars, state≤160, item strings≤180 chars;
+     important_context≤12, active_items≤10, recent_changes≤8, known_facts≤12, uncertainties≤8; whole Read ≤~12KB.
+     Oversized Writes are auto-trimmed (note in read_changelog) or rejected if still too large.
+   - When refreshing a Read, compress/roll excess into the correct leaf files or History; prefer pointers over inlining.
+   - Keep active JSON files small. Roll stale bulk files into the nearest History/ folder.
+   - Do not duplicate the same fact across many files; update the canonical location (usually a leaf; Read only holds a short digest/pointer).
+
+4. Hayden personal knowledge
+   - Hayden/ is the full personal model: Identity, Values, Preferences, Habits, Desires, Relationships, Secrets, Memories, Body, Psychology, Research, Inbox.
+   - Always start at Hayden/Read.json, then open the relevant subtree Read.json (e.g. Relationships/Read.json) before deep files.
+   - People live at Hayden/Relationships/People/<Name>.json (Person template).
+   - Multiple sides of Hayden live in Identity/Sides.json — treat sides as real, not contradictions to erase.
+   - Goal: know Hayden inside and out. Prefer writing lasting truth into the right leaf file over stuffing Hayden/Read.json.
+   - If something lasting has no clear home, SOI may use Hayden/Inbox/Captures.json. Ephemeral chatter stays out of the DB.
+
+4b. Dual AI roles
+   - AI1 OAC (Orchestrator of Conversation): live interface. READ tools + allowlisted quiz helpers
+     (should_suggest_quiz, list_quiz_candidates, start_quiz, record_quiz_answer, get_quiz_status).
+     Short-term chat lives in db/runtime/oac/ (including quiz_active.json). OAC cannot use general DB writes.
+   - Every OAC user turn is stacked onto Changelog.json as action=oac_turn with full user_text (and assistant_text) and soi_status=pending. That content stays pending until SOI files it into proper leaves or marks it discarded.
+   - AI2 SOI (Slave of Information) has two phases:
+       Phase 1 filing — after OAC idle soi_idle_seconds (default 45s): process pending oac_turn + unfiled Inbox; mutate DB; mark changelog entries filed/discarded.
+         Research / topic-bound turns → upsert_research_session (and complete_research_session when done)
+         under Hayden/Research/Sessions/; lasting topic facts also go to Topics/<Slug>/Notes.
+         Lasting writes auto-append to that folder's Read.json read_changelog and set needs_update=true (mark_read_stale helper).
+       Phase 2 Read refresh — only when filing queue is clear AND OAC idle soi_read_refresh_idle_seconds (default 600s / 10m):
+         discover ONLY Read.json with needs_update=true (or pending read_changelog); skip clean Reads; rewrite those digests; then mark_read_refreshed (needs_update=false, changelog entries consumed).
+   - SOI state lives under db/runtime/soi/. OAC must not mutate the personal DB except via allowlisted quiz score tools; host/runtime owns Changelog handoff writes.
+
+4c. Research sessions + quiz
+   - Topics live under Hayden/Research/Topics/<Slug>/ (Read, Notes, History).
+   - Session entities: Hayden/Research/Sessions/<SessionId>.json — subject, length, details_covered,
+     topic link, memory_score, status open|complete. Discoverable via Research/Index.json (topics + sessions).
+   - Durable scores: Hayden/Research/Scores.json (sessions + topics). Updated by record_quiz_answer only.
+   - OAC may occasionally suggest a quiz (should_suggest_quiz throttle); on confirm, start_quiz → ask/grade → record_quiz_answer.
+
+5. Secrets
+   - Hayden/Secrets/ is a private vault. The AI may read it to understand Hayden.
+   - Default: use secrets for understanding and better help; do NOT volunteer secret contents in spoken/output speech.
+   - Only name or narrate a secret if Hayden explicitly asks, or if withholding it would cause clear harm/safety issues.
+   - When advice depends on a secret, ask before revealing it, or speak in careful generalities.
+
+6. Structure
+   - Respect Folderrules.json for naming, allowed parents, and COP templates.
+   - Standard COP docs: Profile.json, Read.json, Plan.json, History.json (plus Decisions / Open Questions on projects).
+   - Under Hayden/, SOI may create nested folders/files as needed for personal knowledge.
+   - Domain roots Hayden/, School/, Work/, Household/ must not be deleted or renamed by the AI.
+   - db/runtime/ is host-owned short-term state (OAC sessions, SOI cursor).
+
+7. Mutations
+   - Prefer patch_json over full write_json when updating existing documents.
+   - Prefer capture_inbox for unsorted lasting scraps (SOI).
+   - Every successful mutating tool call must produce a changelog entry.
+   - Lasting content writes auto-mark the nearest folder Read.json stale (needs_update + read_changelog). Writing Read.json itself does not re-mark stale.
+   - After SOI Read refresh, call mark_read_refreshed (host also clears remaining stale gates after a successful domain run).
+   - Never invent paths that break COP conventions (Profile / Read / Plan / History / Files).
+
+8. Honesty
+   - If a tool call is denied, say so. Do not pretend the database changed.
+
+9. Internet search (Brave)
+   - Tools: web_search (Brave Search API) and web_fetch (plain-text URL fetch). Available to OAC
+     (read-only live) and SOI (full catalog). Prefer web_search for external facts; do not invent.
+   - API key: set environment variable BRAVE_API_KEY or AINET_BRAVE_API_KEY to your Brave Search
+     API subscription token (https://brave.com/search/api/). If the key is missing, web_search
+     fails clearly — create a free Brave Search API key and export it before relying on search.
+   - macOS: add to ~/.zshrc, or export for the current Terminal session:
+       export BRAVE_API_KEY="your_token_here"

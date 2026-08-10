@@ -1,0 +1,24 @@
+{
+  "_ainet": {
+    "doc": "Person.json",
+    "role": "One person Hayden knows. Store under Hayden/Relationships/People/<Name>.json",
+    "edit": "Fill when adding someone. Use create_json with this template (filename match Person.json only if named Person.json — prefer copying shape via Relationships defaults)."
+  },
+  "name": "",
+  "aliases": [],
+  "how_we_met": "",
+  "relationship_type": "",
+  "status": "",
+  "closeness": 0.0,
+  "how_i_feel": "",
+  "how_i_act_around_them": "",
+  "what_they_know_about_me": [],
+  "what_i_know_about_them": [],
+  "shared_history": [],
+  "boundaries": [],
+  "secrets_involving_them": [],
+  "triggers_around_them": [],
+  "tags": [],
+  "related_paths": [],
+  "last_updated": ""
+}

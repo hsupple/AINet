@@ -10,6 +10,8 @@ Talk into a mic on an ESP32. The ESP32 sends the audio signal to a **Windows PC*
 Mic → ESP32 → Windows PC (Ollama + AINet tools) → ESP32 → Speaker
 ```
 
+**macOS edition:** see [`mac/`](mac/) (self-contained `ainet/` + `ollama/` + `db/`, zsh scripts). Root tree stays Windows-oriented.
+
 Database tool paths always use forward slashes (example: `Hayden/Read.json`), including on Windows.
 The model does not operate from free-floating chat memory alone. Every useful turn goes through an organized, efficiency-bound database that stays current as life changes.
 

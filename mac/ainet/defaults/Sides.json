@@ -1,0 +1,18 @@
+{
+  "_ainet": {
+    "doc": "Side item shape for Hayden/Identity/Sides.json",
+    "item_shape": {
+      "id": "",
+      "name": "",
+      "description": "",
+      "when_it_shows": "",
+      "traits": [],
+      "likes": [],
+      "dislikes": [],
+      "how_i_act": "",
+      "intensity": 0.0,
+      "related_paths": []
+    }
+  },
+  "sides": []
+}

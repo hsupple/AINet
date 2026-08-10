@@ -1,0 +1,28 @@
+{
+  "summary": "Deep research threads under Topics/<Slug>/; session logs under Sessions/; quiz scores in Scores.json.",
+  "state": "",
+  "important_context": [
+    "Index.json",
+    "Topics/",
+    "Sessions/",
+    "Scores.json"
+  ],
+  "recent_changes": [],
+  "active_items": [
+    "Open or create a topic before a long rabbit hole",
+    "SOI files Sessions/<Id>.json from research oac_turn entries"
+  ],
+  "known_facts": [],
+  "uncertainties": [],
+  "last_updated": "",
+  "needs_update": true,
+  "read_changelog": [
+    {
+      "id": "d6367f140e49",
+      "at": "2026-08-08T20:36:58+00:00",
+      "summary": "Research conversation sessions",
+      "source_path": "Hayden/Research/Sessions",
+      "status": "pending"
+    }
+  ]
+}
