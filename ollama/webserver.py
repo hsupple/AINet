@@ -44,13 +44,20 @@ class ChatApp:
         if config.soi_enabled:
             self.watcher.start()
 
-    def _append_soi_log(self, msg: str) -> None:
-        text = str(msg or "").rstrip()
-        if not text:
+    def _append_soi_log(self, msg: str | dict[str, Any]) -> None:
+        if isinstance(msg, dict):
+            row = {k: v for k, v in msg.items() if v is not None}
+            text = str(row.get("text") or "").rstrip()
+            row["text"] = text
+        else:
+            text = str(msg or "").rstrip()
+            row = {"text": text}
+        if not text and not row.get("event"):
             return
         with self.lock:
             self._soi_seq += 1
-            self.soi_log.append({"id": self._soi_seq, "text": text})
+            row["id"] = self._soi_seq
+            self.soi_log.append(row)
 
     def soi_lines_after(self, after_id: int = 0) -> list[dict[str, Any]]:
         with self.lock:

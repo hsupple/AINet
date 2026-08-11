@@ -18,6 +18,7 @@ from pathlib import Path
 from ollama.client import OllamaClient, OllamaError
 from ollama.config import OllamaConfig
 from ollama.idle import IdleSOIWatcher
+from ollama.soi_log import status_line
 from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
 from ollama.router import suggest_mode
 from ollama.session import ChatSession
@@ -271,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         watcher = IdleSOIWatcher(
             session,
             config,
-            on_status=lambda msg: print(msg, flush=True),
+            on_status=lambda msg: print(status_line(msg), flush=True),
         )
         watcher.start()
         print(

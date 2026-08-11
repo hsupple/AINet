@@ -23,13 +23,23 @@ _RESEARCH = re.compile(
     re.I,
 )
 _PSYCH = re.compile(
-    r"\b(i feel|i'?m (anxious|stressed|scared|overwhelmed)|trigger|open loops?|"
-    r"coping|defense|attachment|i'?m struggling|makes me anxious)\b",
+    r"("
+    r"\bfeelings?\b|\blonely\b|\bloneliness\b|\bfloating\b|"
+    r"\bi feel\b|i just feel|i feel like|"
+    r"i'?m (pretty |kinda |so |really )?(anxious|stressed|scared|sad|depressed|lonely|overwhelmed|worthless)|"
+    r"discuss my feelings|talk about my feelings|my feelings|"
+    r"i (don'?t|do not) like myself|i hate myself|i dislike myself|"
+    r"self[- ]esteem|self[- ]hate|trigger|open loops?|coping|defense|attachment|"
+    r"i'?m struggling|makes me (feel|anxious)|"
+    r"need a (friend|partner)|my own best friend|"
+    r"friends don'?t|family doesn'?t"
+    r")",
     re.I,
 )
 _HABIT = re.compile(
     r"\b(every (morning|afternoon|night|day)|routine|habit|pomodoro|"
-    r"i always|i keep|discipline|vice|i'?ve been switching)\b",
+    r"i always|i keep|discipline|vice|i'?ve been switching|"
+    r"gym|workout|went to the gym)\b",
     re.I,
 )
 _IDENTITY = re.compile(
@@ -86,9 +96,10 @@ def content_kind(user_text: str, assistant_text: str = "") -> str:
         return "habits"
     if _IDENTITY.search(user):
         return "identity"
-    if _VOICE_CUE.search(user) and not _RESEARCH.search(user) and not _QUESTION.search(user):
+    if _VOICE_CUE.search(user) and not _RESEARCH.search(user):
         return "voice"
-    if _RESEARCH.search(user) or _QUESTION.search(user):
+    # "?" alone is not research — feelings/life questions stay personal or general.
+    if _RESEARCH.search(user):
         return "research"
     if is_research_followup(user) and len(asst) > 180:
         return "research"
@@ -122,6 +133,19 @@ def topic_title_from_text(user_text: str) -> str | None:
     if 8 <= len(cleaned) <= 72:
         return cleaned[:1].upper() + cleaned[1:]
     return None
+
+
+def cop_name_in_text(path: str, user_text: str) -> bool:
+    """True when the COP folder name actually appears in the turn."""
+    name = (path or "").replace("\\", "/").rstrip("/").split("/")[-1]
+    if name.lower().endswith(".json"):
+        parent = (path or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[0]
+        name = parent.split("/")[-1] if parent else name[:-5]
+    token = re.sub(r"[^a-z0-9]+", "", name.lower())
+    blob = re.sub(r"[^a-z0-9]+", "", (user_text or "").lower())
+    if len(token) < 3 or not blob:
+        return False
+    return token in blob
 
 
 def entry_kind(entry: dict[str, Any]) -> str:

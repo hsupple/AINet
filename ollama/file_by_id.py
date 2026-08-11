@@ -10,6 +10,7 @@ from ainet.tools import changelog
 from ainet.tools.ops import DatabaseTools
 from ollama.content_filing import (
     content_kind,
+    cop_name_in_text,
     family_title_from_text,
     is_ephemeral_text,
     is_research_followup,
@@ -39,10 +40,10 @@ def _entry_text(entry: dict[str, Any]) -> tuple[str, str]:
 _NAMED_DEST_KINDS = {
     "research": {"research"},
     "session": {"research"},
-    "identity": {"identity"},
-    "personality": {"identity"},
+    "identity": {"identity", "voice", "psychology"},
+    "personality": {"identity", "voice"},
     "voice": {"voice", "identity"},
-    "psychology": {"psychology"},
+    "psychology": {"psychology", "identity"},
     "habits": {"habits"},
 }
 
@@ -144,19 +145,33 @@ def file_by_id(
     first = changelog.get_entry(db.paths, ids[0])
     user0, asst0 = _entry_text(first or {})
     kind0 = content_kind(user0, asst0)
-    allowed = _NAMED_DEST_KINDS.get(dest_norm)
+    personal_dest = dest_norm in {
+        "psychology",
+        "identity",
+        "personality",
+        "voice",
+        "habits",
+    }
     researchish = dest_norm in {"research", "session"} or dest_raw.replace("\\", "/").startswith(
         "Hayden/Research"
     )
-    if (allowed and kind0 not in allowed) or (
-        researchish and kind0 != "research" and not is_research_followup(user0)
-    ):
+    # Trust SOI on Hayden personal dests. Only block dumping real research into
+    # psych/identity, or dumping life/feelings/admin into research.
+    if personal_dest and kind0 == "research":
         return {
             "ok": False,
             "error": (
-                f"dest={dest_raw} refused — this turn is {kind0}. "
-                "Inspect domain_snapshot / Folderrules (School, Work, Household, Hayden). "
-                "If that domain is missing COPs/folders the text needs, create_cop or write_json there."
+                f"dest={dest_raw} refused — this turn is research. "
+                "Use dest=research, not psychology/identity/habits/voice."
+            ),
+            "entry_ids": ids,
+        }
+    if researchish and kind0 != "research" and not is_research_followup(user0):
+        return {
+            "ok": False,
+            "error": (
+                f"dest=research refused — this turn is {kind0}. "
+                "Use dest=psychology|identity|habits|voice or a Folderrules leaf."
             ),
             "entry_ids": ids,
         }
@@ -294,11 +309,36 @@ def file_by_id(
             "ok": False,
             "error": (
                 f"{path_norm} refused — this turn is {kind0}, not research. "
-                "Inspect domain_snapshot (School/Work/Household/Hayden) and create_cop / write_json there."
+                "Use dest=psychology|identity|habits or the matching Folderrules leaf."
             ),
             "entry_ids": ids,
         }
-    if "Inbox/" in path_norm or path_norm.lower().endswith("inbox/captures.json"):
+    if path_norm.startswith(("School/", "Work/", "Household/")) and kind0 in {
+        "psychology",
+        "identity",
+        "voice",
+        "habits",
+    }:
+        return {
+            "ok": False,
+            "error": (
+                f"{path_norm} refused — this turn is {kind0}. "
+                "file_by_id dest=psychology|identity|habits|voice, not a School/Work COP."
+            ),
+            "entry_ids": ids,
+        }
+    if ("/Courses/" in path_norm or "/Projects/" in path_norm) and not cop_name_in_text(
+        path_norm, user0
+    ):
+        return {
+            "ok": False,
+            "error": (
+                f"{path_norm} refused — that COP name is not in user_text. "
+                "Do not invent courses or projects."
+            ),
+            "entry_ids": ids,
+        }
+    if "inbox" in path_norm.lower():
         return {
             "ok": False,
             "error": (
@@ -308,10 +348,19 @@ def file_by_id(
             "entry_ids": ids,
         }
     if not path.endswith(".json"):
-        return {
-            "ok": False,
-            "error": f"dest must be discard, research, or a .json leaf path (got {dest_raw})",
-        }
+        leaf = None
+        for name in ("Plan.json", "Notes.json", "History.json"):
+            candidate = f"{path_norm.rstrip('/')}/{name}"
+            if db.paths.resolve(candidate).exists():
+                leaf = candidate
+                break
+        if not leaf:
+            return {
+                "ok": False,
+                "error": f"dest must be discard, research, or a .json leaf path (got {dest_raw})",
+            }
+        path = leaf
+        path_norm = path
 
     filed: list[str] = []
     for eid in ids:

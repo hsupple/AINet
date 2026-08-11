@@ -10,6 +10,7 @@ from typing import Any
 from ainet.tools.ops import DatabaseTools
 from ainet.tools.registry import catalog_tools, dispatch, tools_subset
 from ollama.client import OllamaClient, ThinkingCallback, TokenCallback
+from ollama.content_filing import cop_name_in_text
 from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
 from ollama.conversation_store import ConversationStore
@@ -96,6 +97,13 @@ class ChatSession:
     def _active_tools(self) -> list[dict[str, Any]] | None:
         if not self.mode.tools_enabled:
             return None
+        if self.mode.role == "soi":
+            names = self.mode.tool_names or ()
+            return [
+                t
+                for t in tools_subset(names)
+                if (t.get("function") or {}).get("name") not in {"get_tools", "getTools"}
+            ]
         if not self.mode.allow_mutations:
             # OAC: read + web + quiz helpers only (never general writes)
             if self.full_tools_unlocked:
@@ -188,7 +196,11 @@ class ChatSession:
             "start_quiz",
             "record_quiz_answer",
         }
-        soi_opts = {"temperature": 0} if self.mode.role == "soi" else None
+        soi_opts = (
+            {"temperature": 0, "num_predict": 900}
+            if self.mode.role == "soi"
+            else None
+        )
 
         for _round in range(self.config.max_tool_rounds):
             if stream or on_token or on_thinking:
@@ -234,6 +246,8 @@ class ChatSession:
                 if self.mode.role == "soi":
                     name, args = normalize_soi_tool(name, args)
                     call = {"function": {"name": name, "arguments": args}}
+                if not name:
+                    continue
                 if on_tool:
                     on_tool("start", name, {"arguments": args})
                 result = self._run_tool_call(call)
@@ -247,7 +261,7 @@ class ChatSession:
                             "result": result if isinstance(result, dict) else {},
                         }
                     )
-                if name in {"get_tools", "getTools"}:
+                if name in {"get_tools", "getTools"} and self.mode.role != "soi":
                     self.full_tools_unlocked = True
                     tools = self._active_tools()
                 if on_tool:
@@ -419,10 +433,45 @@ class ChatSession:
                 ),
             }
 
+        if self.mode.role == "soi" and name in {"create_cop", "create_folder"}:
+            path = str(args.get("path") or args.get("folder_path") or "")
+            if "/Courses/" in path.replace("\\", "/") or "/Projects/" in path.replace("\\", "/"):
+                src = self._soi_source_text()
+                if src and not cop_name_in_text(path, src):
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"{name} refused — {path} is not named in user_text. "
+                            "Do not invent COPs."
+                        ),
+                    }
+
         result = dispatch(self.db, name, args)
         if self.mode.role == "soi":
             result = _redact_assistant_fields(result)
         return result
+
+    def _soi_source_text(self) -> str:
+        parts: list[str] = []
+        for message in reversed(self.messages):
+            if message.get("role") != "user":
+                continue
+            raw = str(message.get("content") or "")
+            idx = raw.find("{")
+            if idx < 0:
+                parts.append(raw)
+                break
+            try:
+                obj = json.loads(raw[idx:])
+            except json.JSONDecodeError:
+                parts.append(raw)
+                break
+            if isinstance(obj, dict):
+                for entry in obj.get("changelog_entries") or []:
+                    if isinstance(entry, dict) and entry.get("user_text"):
+                        parts.append(str(entry["user_text"]))
+            break
+        return "\n".join(parts)
 
 
 def _redact_assistant_fields(obj: Any) -> Any:

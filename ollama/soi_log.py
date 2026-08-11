@@ -8,6 +8,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+StatusPayload = str | dict[str, Any]
+
+
+def status_line(msg: StatusPayload) -> str:
+    if isinstance(msg, dict):
+        return str(msg.get("text") or "")
+    return str(msg or "")
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -41,7 +50,7 @@ class SOILogger:
         self,
         db_root: Path,
         *,
-        on_status: Callable[[str], None] | None = None,
+        on_status: Callable[[StatusPayload], None] | None = None,
     ) -> None:
         self.dir = Path(db_root) / "runtime" / "soi"
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -68,7 +77,13 @@ class SOILogger:
             return
         line = self._format_status(event, level=level, **fields)
         if line:
-            self.on_status(line)
+            payload: dict[str, Any] = {
+                "text": line,
+                "event": event,
+                "level": level,
+                **{k: v for k, v in fields.items() if v is not None},
+            }
+            self.on_status(payload)
 
     def _format_status(self, event: str, *, level: str, **fields: Any) -> str:
         if event == "filing_start":
@@ -110,7 +125,7 @@ class SOILogger:
             summary = fields.get("summary") or ""
             return f"(SOI tool {mark} {name}: {summary})"
         if event == "model_no_tools":
-            return "(SOI emitted prose with zero tool_calls — nudged to call tools)"
+            return "(SOI emitted prose with zero native tool_calls)"
         if event == "model_ask":
             return (
                 f"(SOI model ask phase={fields.get('phase', 'soi')} "

@@ -17,7 +17,13 @@ from ollama.client import OllamaClient, OllamaError
 from ollama.config import OllamaConfig
 from ollama.modes import get_mode
 from ollama.research_sessions import INDEX_PATH, upsert_research_session
-from ollama.content_filing import content_kind, entry_kind, is_ephemeral_text, topic_title_from_text
+from ollama.content_filing import (
+    content_kind,
+    cop_name_in_text,
+    entry_kind,
+    is_ephemeral_text,
+    topic_title_from_text,
+)
 from ollama.session import ChatSession, _guess_topic_title
 from ollama.soi_log import SOILogger
 from ollama.topics import (
@@ -29,8 +35,8 @@ from ollama.topics import (
 )
 
 _FILING_BATCH_SIZE = 4
-_SOI_MIN_TOOL_ROUNDS = 24
-_SOI_MAX_HISTORY = 40
+_SOI_MIN_TOOL_ROUNDS = 6
+_SOI_MAX_HISTORY = 16
 
 
 def _utc_now() -> str:
@@ -248,9 +254,12 @@ class SOIWorker:
             raw = self.db.read_json("Folderrules.json")["data"]
             if isinstance(raw, dict):
                 layout = {
-                    "domains": raw.get("domains"),
-                    "ai_may_create_under": (raw.get("ai_may_create") or {}).get("under"),
-                    "cop_templates": raw.get("cop_templates"),
+                    "domains": list((raw.get("domains") or {}).keys())
+                    if isinstance(raw.get("domains"), dict)
+                    else raw.get("domains"),
+                    "create_under": (raw.get("ai_may_create") or {}).get("under"),
+                    "course_cop": "School/Courses/<Code>",
+                    "project_cop": "Work/Projects/<Name>",
                 }
         snapshot = self._domain_snapshot()
         payload = {
@@ -260,11 +269,9 @@ class SOIWorker:
             "changelog_entries": [_entry_for_soi(e) for e in batch_changelog],
             "inbox_unfiled": [_inbox_for_soi(c) for c in batch_inbox],
             "instructions": (
-                "Emit tool_calls. Do not describe the DB in prose. "
-                "Domains are ONLY Hayden, School, Work, Household (not Plans). "
-                "Pick the domain from user_text, list_dir/tree it if needed, then "
-                "create_cop / write_json / patch_json where the snapshot is missing COPs. "
-                "Hayden/Research is how/why questions only. file_by_id copies user text by id."
+                "tool_calls only. No essays. No markdown. "
+                "create_cop only if user_text names that course/project. "
+                "Feelings → dest=psychology. Do not invent COPs. file_by_id copies text by id."
             ),
         }
 
@@ -337,9 +344,8 @@ class SOIWorker:
                     or ""
                 )
 
+        domain_plans: set[str] = set()
         for call in stats.get("mutating_calls") or []:
-            if call.get("ok") is False:
-                continue
             if call.get("tool") not in {"create_cop", "create_folder", "write_json", "patch_json"}:
                 continue
             args = call.get("args") if isinstance(call.get("args"), dict) else {}
@@ -352,8 +358,42 @@ class SOIWorker:
                     continue
                 if entry.get("suggested_filing") in {"research", "discard"}:
                     continue
+                text = _entry_user_text(entry)
+                if ("/Courses/" in path or "/Projects/" in path) and not cop_name_in_text(
+                    path, text
+                ):
+                    continue
                 handled_by_id.add(eid)
                 dest_by_id[eid] = path
+                domain = path.split("/", 1)[0]
+                domain_plans.add(f"{domain}/Plan.json")
+        for entry in batch_changelog:
+            eid = str(entry.get("id") or "")
+            if not eid or eid not in handled_by_id:
+                continue
+            text = _entry_user_text(entry)
+            if not text:
+                continue
+            for plan in domain_plans:
+                if not self.db.paths.resolve(plan).exists():
+                    continue
+                data = self.db.read_json(plan)["data"]
+                if not isinstance(data, dict):
+                    continue
+                plans = data.get("plans") if isinstance(data.get("plans"), list) else []
+                if not any(isinstance(row, dict) and row.get("id") == eid for row in plans):
+                    plans.append(
+                        {
+                            "id": eid,
+                            "objective": text,
+                            "status": "active",
+                            "last_updated": _utc_now(),
+                        }
+                    )
+                    data["plans"] = plans
+                    data["last_updated"] = _utc_now()
+                    self.db.write_json(plan, data, summary=f"File oac_turn {eid} into {plan}")
+                dest_by_id[eid] = plan
 
         # Host safety nets only for ids SOI did not already place by id.
         leftover = [
@@ -708,7 +748,7 @@ class SOIWorker:
         try:
             reply = session.ask(
                 "SOI job — process this batch with TOOL CALLS (mutations required):\n"
-                + json.dumps(payload, ensure_ascii=False, indent=2),
+                + json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                 stream=stream,
                 on_thinking=None,
                 on_tool=on_tool,

@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from ainet.tools.fsutil import atomic_write_text
 from ainet.tools.paths import DbPaths
+
+_MASTER_LOCK = threading.Lock()
+_TLS = threading.local()
 
 
 def _utc_now() -> str:
@@ -88,37 +93,64 @@ def _save_masterlog(paths: DbPaths, data: dict[str, Any]) -> None:
     atomic_write_text(master_path, text)
 
 
+@contextmanager
+def defer_masterlog(paths: DbPaths) -> Iterator[None]:
+    """Coalesce many tool-write rows into one Masterlog replace (avoids WinError 5)."""
+    depth = int(getattr(_TLS, "depth", 0) or 0)
+    _TLS.depth = depth + 1
+    if depth == 0:
+        _TLS.buf = []
+        _TLS.paths = paths
+    try:
+        yield
+    finally:
+        _TLS.depth = int(getattr(_TLS, "depth", 1) or 1) - 1
+        if _TLS.depth == 0:
+            pending = list(getattr(_TLS, "buf", []) or [])
+            _TLS.buf = []
+            if pending:
+                append_masterlog_entries(paths, pending)
+
+
 def append_masterlog_entries(paths: DbPaths, entries: list[dict[str, Any]]) -> int:
     """Append unique entries to Masterlog.json. Never deletes. Returns count added."""
     if not entries:
         return 0
-    data = _load_masterlog(paths)
-    existing = {
-        str(e.get("id") or "")
-        for e in data["entries"]
-        if isinstance(e, dict) and e.get("id")
-    }
-    added = 0
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        eid = str(entry.get("id") or "")
-        if not eid:
-            continue
-        if eid in existing:
-            for i, row in enumerate(data["entries"]):
-                if isinstance(row, dict) and str(row.get("id") or "") == eid:
-                    data["entries"][i] = entry
-                    added += 1
-                    break
-            continue
-        data["entries"].append(entry)
-        existing.add(eid)
-        added += 1
-    if added:
-        data["last_updated"] = _utc_now()
-        _save_masterlog(paths, data)
-    return added
+    if int(getattr(_TLS, "depth", 0) or 0) > 0:
+        buf = getattr(_TLS, "buf", None)
+        if buf is None:
+            _TLS.buf = []
+            buf = _TLS.buf
+        buf.extend(entries)
+        return len(entries)
+    with _MASTER_LOCK:
+        data = _load_masterlog(paths)
+        existing = {
+            str(e.get("id") or "")
+            for e in data["entries"]
+            if isinstance(e, dict) and e.get("id")
+        }
+        added = 0
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            eid = str(entry.get("id") or "")
+            if not eid:
+                continue
+            if eid in existing:
+                for i, row in enumerate(data["entries"]):
+                    if isinstance(row, dict) and str(row.get("id") or "") == eid:
+                        data["entries"][i] = entry
+                        added += 1
+                        break
+                continue
+            data["entries"].append(entry)
+            existing.add(eid)
+            added += 1
+        if added:
+            data["last_updated"] = _utc_now()
+            _save_masterlog(paths, data)
+        return added
 
 
 def get_entry(paths: DbPaths, entry_id: str) -> dict[str, Any] | None:

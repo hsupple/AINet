@@ -10,6 +10,9 @@ _TOOL_XML = re.compile(r"<tool_call>\s*", re.S)
 _FENCE = re.compile(r"```(?:json)?\s*", re.I)
 _PLANS_COURSES = re.compile(r"(?i)^Hayden/(?:Plans|Planner)/Courses/")
 _PLANS_ROOT = re.compile(r"(?i)^Hayden/(?:Plans|Planner)(?=/|$)")
+_NARRATED_COURSE = re.compile(
+    r"(?i)(?:Hayden/(?:Plans|Planner)|School)/Courses/([A-Za-z][A-Za-z0-9._-]{1,24})"
+)
 
 
 def remap_folderrules_path(path: str) -> str:
@@ -38,13 +41,11 @@ def normalize_soi_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, 
         if not kind:
             kind = "course" if "/Courses/" in path or path.startswith("School/") else "project"
         if path.endswith(".json"):
-            return "write_json", {
-                "path": path,
-                "data": args.get("data") if isinstance(args.get("data"), dict) else {},
-                "create": True,
-                "summary": args.get("summary"),
-            }
-        return "create_cop", {"path": path, "kind": kind, "summary": args.get("summary")}
+            return "", {}
+        out: dict[str, Any] = {"path": path, "kind": kind}
+        if args.get("summary"):
+            out["summary"] = args["summary"]
+        return "create_cop", out
     return name, args
 
 
@@ -77,6 +78,8 @@ def parse_content_tool_calls(text: str) -> list[dict[str, Any]]:
         calls.extend(_calls_from_obj(obj))
     if not calls:
         calls.extend(_calls_from_loose_json(text))
+    if not calls:
+        calls.extend(_calls_from_narrated_courses(text))
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for call in calls:
@@ -150,3 +153,15 @@ def _calls_from_loose_json(text: str) -> list[dict[str, Any]]:
     if any(k in obj for k in ("create_folder", "create_cop", "write_json", "name")):
         return _calls_from_obj(obj)
     return []
+
+
+def _calls_from_narrated_courses(text: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in _NARRATED_COURSE.finditer(text or ""):
+        code = match.group(1).strip().strip("/").split("/")[0]
+        if not code or code.lower() in seen:
+            continue
+        seen.add(code.lower())
+        out.append(_wrap("create_cop", {"path": f"School/Courses/{code}", "kind": "course"}))
+    return out

@@ -377,21 +377,28 @@ class DatabaseTools:
         if not template:
             raise PermissionError_(f"Unknown COP kind: {kind}")
 
-        created = self.create_folder(path, summary=summary or f"Created {kind} COP root")
-        made: list[str] = []
-        root = normalize_relpath(path)
-        for item in template:
-            child = f"{root}/{item}".replace("//", "/")
-            if item.endswith("/"):
-                result = self.create_folder(child.rstrip("/"), summary=f"COP folder {item}")
-            else:
-                result = self.write_json(
-                    child,
-                    load_default_for_path(child),
-                    create=True,
-                    summary=f"COP file {item}",
-                )
-            made.append(result["path"])
+        with changelog.defer_masterlog(self.paths):
+            created = self.create_folder(path, summary=summary or f"Created {kind} COP root")
+            made: list[str] = []
+            root = normalize_relpath(path)
+            for item in template:
+                child = f"{root}/{item}".replace("//", "/")
+                if item.endswith("/"):
+                    if self.paths.resolve(child.rstrip("/")).exists():
+                        made.append(child.rstrip("/"))
+                        continue
+                    result = self.create_folder(child.rstrip("/"), summary=f"COP folder {item}")
+                else:
+                    if self.paths.resolve(child).exists():
+                        made.append(child)
+                        continue
+                    result = self.write_json(
+                        child,
+                        load_default_for_path(child),
+                        create=True,
+                        summary=f"COP file {item}",
+                    )
+                made.append(result["path"])
         return {
             "ok": True,
             "path": path,

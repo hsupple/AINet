@@ -36,7 +36,7 @@
     }
 
     .shell {
-      max-width: 1180px;
+      max-width: 1360px;
       height: 100%;
       margin: 0 auto;
       padding: 1.25rem 1rem 1rem;
@@ -48,13 +48,13 @@
     .workspace {
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
-      gap: 0.75rem;
+      grid-template-columns: minmax(0, 1.05fr) minmax(380px, 1fr);
+      gap: 0.85rem;
     }
-    @media (max-width: 820px) {
+    @media (max-width: 900px) {
       .workspace {
         grid-template-columns: 1fr;
-        grid-template-rows: minmax(0, 1fr) 220px;
+        grid-template-rows: minmax(0, 1fr) minmax(280px, 42vh);
       }
     }
 
@@ -174,11 +174,48 @@
       color: var(--muted);
     }
     .soi-head strong { color: var(--accent); font-weight: 600; text-transform: none; letter-spacing: 0; }
-    #soi-out {
+    .soi-head-left {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      min-width: 0;
+    }
+    .soi-view {
+      display: inline-flex;
+      padding: 2px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.22);
+    }
+    .soi-view button {
+      padding: 0.18rem 0.55rem;
+      font-size: 0.64rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      border-radius: 999px;
+    }
+    .soi-view button.on {
+      background: var(--accent);
+      color: var(--ink);
+      font-weight: 600;
+    }
+    .soi-view button:hover { border: none; }
+    .soi-body {
       flex: 1;
+      min-height: 0;
+      position: relative;
+    }
+    #soi-out, #soi-feed {
+      position: absolute;
+      inset: 0;
+      overflow-y: auto;
+    }
+    #soi-out {
       margin: 0;
       padding: 0.7rem 0.8rem 0.9rem;
-      overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-word;
       font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
@@ -186,10 +223,138 @@
       line-height: 1.45;
       color: #cfe6d8;
     }
-    #soi-out:empty::before {
+    .soi-panel.view-panel #soi-out { display: none; }
+    .soi-panel.view-raw #soi-feed { display: none; }
+    #soi-out:empty::before,
+    #soi-feed:empty::before {
       content: "SOI output will stream here…";
       color: var(--muted);
+      font-family: "Sora", sans-serif;
+      font-size: 0.74rem;
     }
+    #soi-feed {
+      display: flex;
+      flex-direction: column;
+      gap: 0.7rem;
+      padding: 0.85rem 0.85rem 1.1rem;
+    }
+    .soi-card {
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      min-width: 0;
+      padding: 0.8rem 0.9rem 0.85rem;
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--tool, #6a8579);
+      border-radius: 0.85rem;
+      background: rgba(255, 255, 255, 0.045);
+      overflow: visible;
+      animation: rise 180ms ease-out;
+    }
+    .soi-card-rail { display: none; }
+    .soi-card-body {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      padding: 0;
+    }
+    .soi-card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.65rem;
+    }
+    .soi-tool-badge {
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      color: var(--tool, var(--accent));
+      font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    }
+    .soi-card-status {
+      flex: 0 0 auto;
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .soi-card.pending .soi-card-status {
+      color: #d4a24c;
+    }
+    .soi-card.pending .soi-card-status::before {
+      content: "";
+      display: inline-block;
+      width: 0.5rem;
+      height: 0.5rem;
+      margin-right: 0.32rem;
+      border-radius: 50%;
+      border: 1.5px solid #d4a24c;
+      border-top-color: transparent;
+      vertical-align: -1px;
+      animation: soi-spin 0.7s linear infinite;
+    }
+    .soi-card.ok .soi-card-status { color: #8ee0b0; }
+    .soi-card.fail .soi-card-status { color: var(--danger); }
+    .soi-card.fail { border-color: rgba(224, 138, 106, 0.45); }
+    .soi-card-detail {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      padding: 0.55rem 0.65rem;
+      border-radius: 0.55rem;
+      background: rgba(0, 0, 0, 0.28);
+      border: 1px solid rgba(214, 232, 220, 0.08);
+    }
+    .soi-card-arg,
+    .soi-card-result,
+    .soi-card-hint,
+    .soi-phase-meta {
+      margin: 0;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      color: #d7ebe0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .soi-card-result {
+      color: #b8d4c6;
+      padding-top: 0.3rem;
+      border-top: 1px solid rgba(214, 232, 220, 0.1);
+    }
+    .soi-card.phase {
+      border-left-color: var(--accent);
+      background: var(--accent-dim);
+      border-color: rgba(212, 162, 76, 0.22);
+    }
+    .soi-phase-label {
+      font-family: "Instrument Serif", serif;
+      font-size: 1.15rem;
+      line-height: 1.2;
+      color: var(--accent);
+    }
+    .soi-phase-meta {
+      color: var(--muted);
+    }
+    .soi-card.note { --tool: #6a8579; }
+    .soi-card.error-ev {
+      --tool: var(--danger);
+      border-color: rgba(224, 138, 106, 0.4);
+    }
+    @keyframes soi-spin {
+      to { transform: rotate(360deg); }
+    }
+    .tool-file_by_id { --tool: #d4a24c; }
+    .tool-upsert_research_session, .tool-complete_research_session { --tool: #c9a0dc; }
+    .tool-write_json, .tool-create_json, .tool-patch_json, .tool-set_json_path { --tool: #e08a6a; }
+    .tool-create_cop, .tool-create_folder, .tool-move_path { --tool: #b388ff; }
+    .tool-read_json, .tool-read_text { --tool: #6ec8b8; }
+    .tool-list_dir, .tool-tree, .tool-get_tools { --tool: #8fbf7f; }
+    .tool-web_search, .tool-web_fetch { --tool: #7eb6ff; }
+    .tool-mark_read_stale, .tool-mark_read_refreshed { --tool: #5ec2c7; }
+    .tool-capture_inbox { --tool: #e0c07a; }
+    .tool-archive_to_history { --tool: #9aa7c2; }
 
     .bubble {
       max-width: min(92%, 640px);
@@ -288,12 +453,21 @@
 
     <div class="workspace">
       <div id="log" aria-live="polite"></div>
-      <aside class="soi-panel" aria-label="SOI output">
+      <aside class="soi-panel view-panel" id="soi-panel" aria-label="SOI output">
         <div class="soi-head">
-          <span><strong>SOI</strong> live</span>
+          <div class="soi-head-left">
+            <span><strong>SOI</strong> live</span>
+            <div class="soi-view" role="tablist" aria-label="SOI view">
+              <button type="button" id="soi-view-panel" data-view="panel">Panel</button>
+              <button type="button" id="soi-view-raw" data-view="raw">Raw</button>
+            </div>
+          </div>
           <span id="soi-state">Idle</span>
         </div>
-        <pre id="soi-out"></pre>
+        <div class="soi-body">
+          <div id="soi-feed"></div>
+          <pre id="soi-out"></pre>
+        </div>
       </aside>
     </div>
 
@@ -312,10 +486,202 @@
     const meta = document.getElementById("meta");
     const modeSel = document.getElementById("mode");
     const soiBtn = document.getElementById("soi");
+    const soiPanel = document.getElementById("soi-panel");
     const soiOut = document.getElementById("soi-out");
+    const soiFeed = document.getElementById("soi-feed");
     const soiState = document.getElementById("soi-state");
+    const soiViewPanel = document.getElementById("soi-view-panel");
+    const soiViewRaw = document.getElementById("soi-view-raw");
     let busy = false;
     let lastSoiId = 0;
+    const pendingTools = new Map();
+
+    const SOI_VIEW_KEY = "ainet-soi-view";
+
+    function setSoiView(view) {
+      const mode = view === "raw" ? "raw" : "panel";
+      soiPanel.classList.toggle("view-panel", mode === "panel");
+      soiPanel.classList.toggle("view-raw", mode === "raw");
+      soiViewPanel.classList.toggle("on", mode === "panel");
+      soiViewRaw.classList.toggle("on", mode === "raw");
+      try { localStorage.setItem(SOI_VIEW_KEY, mode); } catch (e) {}
+    }
+    try { setSoiView(localStorage.getItem(SOI_VIEW_KEY) || "panel"); }
+    catch (e) { setSoiView("panel"); }
+    soiViewPanel.addEventListener("click", () => setSoiView("panel"));
+    soiViewRaw.addEventListener("click", () => setSoiView("raw"));
+
+    function toolClass(name) {
+      return "tool-" + String(name || "tool").replace(/[^a-zA-Z0-9_]/g, "_");
+    }
+
+    function hintFromRow(row) {
+      if (row.hint) return String(row.hint).trim();
+      const args = row.arguments;
+      if (args && typeof args === "object") {
+        for (const key of ["path", "dest", "query", "url", "entry_id", "entry_ids", "title", "slug", "folder_path"]) {
+          if (args[key] == null || args[key] === "") continue;
+          const val = Array.isArray(args[key]) ? args[key].join(", ") : String(args[key]);
+          return key + "=" + val;
+        }
+      }
+      if (row.summary) return String(row.summary);
+      if (row.preview) {
+        const p = String(row.preview).trim();
+        return p.length > 180 ? p.slice(0, 180) + "…" : p;
+      }
+      return "";
+    }
+
+    function parseSoiRow(row) {
+      if (row && typeof row === "object" && row.event) return row;
+      const text = lineText(row);
+      let m = text.match(/^\(SOI tool -> (\S+)(.*)\)$/);
+      if (m) return { event: "tool_start", name: m[1], hint: m[2] || "", text };
+      m = text.match(/^\(SOI tool (ok|FAIL) (\S+): (.*)\)$/);
+      if (m) return { event: "tool_done", ok: m[1] === "ok", name: m[2], summary: m[3], text };
+      m = text.match(/^\(SOI wake: phase=(\S+)/);
+      if (m) return { event: "idle_wake", phase: m[1], text };
+      if (text.startsWith("(SOI filing...")) return { event: "filing_start", text };
+      if (text.startsWith("(SOI filing done")) return { event: "filing_done", text };
+      if (text.startsWith("(SOI Read refresh...")) return { event: "read_refresh_start", text };
+      if (text.startsWith("(SOI Read refresh done")) return { event: "read_refresh_done", text };
+      if (text.startsWith("(SOI model ask")) return { event: "model_ask", text };
+      if (text.startsWith("(SOI model reply")) return { event: "model_reply", text };
+      if (/error|FAIL|failed/i.test(text)) return { event: "error", text, level: "error" };
+      return { event: "log", text };
+    }
+
+    function phaseCopy(row) {
+      const ev = row.event;
+      if (ev === "idle_wake") return { title: row.phase === "read_refresh" ? "Read refresh" : "Filing wake", meta: row.text };
+      if (ev === "filing_start") return { title: "Filing", meta: row.text };
+      if (ev === "filing_done") return { title: "Filing done", meta: row.text };
+      if (ev === "filing_skip") return { title: "Filing skipped", meta: row.text };
+      if (ev === "read_refresh_start") return { title: "Read refresh", meta: row.text };
+      if (ev === "read_refresh_done") return { title: "Read refresh done", meta: row.text };
+      if (ev === "read_refresh_skip") return { title: "Read refresh skipped", meta: row.text };
+      if (ev === "model_ask") return { title: "Model", meta: row.phase ? "phase " + row.phase : row.text };
+      if (ev === "model_reply") return { title: "Model reply", meta: hintFromRow(row) || row.text };
+      if (ev === "model_no_tools") return { title: "No tool calls", meta: row.text };
+      if (ev === "watcher_start") return { title: "Watcher on", meta: row.text };
+      if (ev === "backoff") return { title: "Backoff", meta: row.text };
+      return { title: ev || "SOI", meta: row.text || "" };
+    }
+
+    function fillDetail(el, arg, result) {
+      const body = el.querySelector(".soi-card-body");
+      let detail = el.querySelector(".soi-card-detail");
+      const hasArg = !!(arg && String(arg).trim());
+      const hasResult = !!(result && String(result).trim() && String(result).trim() !== String(arg || "").trim());
+      if (!hasArg && !hasResult) {
+        if (detail) detail.remove();
+        return;
+      }
+      if (!detail) {
+        detail = document.createElement("div");
+        detail.className = "soi-card-detail";
+        body.appendChild(detail);
+      }
+      detail.replaceChildren();
+      if (hasArg) {
+        const a = document.createElement("div");
+        a.className = "soi-card-arg";
+        a.textContent = String(arg).trim();
+        detail.appendChild(a);
+      }
+      if (hasResult) {
+        const b = document.createElement("div");
+        b.className = "soi-card-result";
+        b.textContent = String(result).trim();
+        detail.appendChild(b);
+      }
+    }
+
+    function appendPhaseCard(row) {
+      const copy = phaseCopy(row);
+      const el = document.createElement("article");
+      el.className = "soi-card phase" + (row.level === "error" || /error/.test(row.event || "") ? " error-ev" : "");
+      el.innerHTML =
+        '<div class="soi-card-body">' +
+          '<span class="soi-phase-label"></span>' +
+          '<div class="soi-card-detail"><p class="soi-phase-meta"></p></div>' +
+        "</div>";
+      el.querySelector(".soi-phase-label").textContent = copy.title;
+      const meta = copy.meta.replace(/^\(SOI\s+/i, "").replace(/\)$/, "");
+      const metaEl = el.querySelector(".soi-phase-meta");
+      if (meta) metaEl.textContent = meta;
+      else metaEl.parentElement.remove();
+      soiFeed.appendChild(el);
+    }
+
+    function appendToolStart(row) {
+      const name = row.name || "tool";
+      const el = document.createElement("article");
+      el.className = "soi-card pending " + toolClass(name);
+      el.innerHTML =
+        '<div class="soi-card-body">' +
+          '<div class="soi-card-top">' +
+            '<span class="soi-tool-badge"></span>' +
+            '<span class="soi-card-status">running</span>' +
+          "</div>" +
+        "</div>";
+      el.querySelector(".soi-tool-badge").textContent = name;
+      const hint = hintFromRow(row);
+      el.dataset.arg = hint;
+      fillDetail(el, hint, "");
+      soiFeed.appendChild(el);
+      const stack = pendingTools.get(name) || [];
+      stack.push(el);
+      pendingTools.set(name, stack);
+    }
+
+    function appendToolDone(row) {
+      const name = row.name || "tool";
+      const stack = pendingTools.get(name) || [];
+      let el = stack.pop();
+      const ok = row.ok !== false;
+      if (!el) {
+        appendToolStart({
+          name,
+          hint: hintFromRow(row),
+          arguments: row.arguments,
+          summary: row.summary,
+        });
+        el = (pendingTools.get(name) || []).pop();
+      }
+      if (!el) return;
+      el.classList.remove("pending");
+      el.classList.add(ok ? "ok" : "fail");
+      const status = el.querySelector(".soi-card-status");
+      if (status) status.textContent = ok ? "ok" : "fail";
+      fillDetail(el, el.dataset.arg || hintFromRow(row), row.summary || "");
+    }
+
+    function appendNoteCard(row, kind) {
+      const el = document.createElement("article");
+      el.className = "soi-card " + (kind || "note");
+      el.innerHTML = '<div class="soi-card-body"><div class="soi-card-detail"><p class="soi-card-hint"></p></div></div>';
+      el.querySelector(".soi-card-hint").textContent = row.text || "";
+      soiFeed.appendChild(el);
+    }
+
+    function appendSoiCard(row) {
+      const ev = row.event || "log";
+      if (ev === "tool_start") appendToolStart(row);
+      else if (ev === "tool_done") appendToolDone(row);
+      else if (
+        ev === "idle_wake" || ev === "filing_start" || ev === "filing_done" ||
+        ev === "filing_skip" || ev === "read_refresh_start" || ev === "read_refresh_done" ||
+        ev === "read_refresh_skip" || ev === "model_ask" || ev === "model_reply" ||
+        ev === "model_no_tools" || ev === "watcher_start" || ev === "backoff"
+      ) appendPhaseCard(row);
+      else if (ev === "error" || ev === "model_error" || ev === "filing_error" || ev === "read_refresh_error") {
+        appendNoteCard(row, "error-ev");
+      } else {
+        appendNoteCard(row, "note");
+      }
+    }
 
     function asText(v) {
       if (v == null) return "";
@@ -376,14 +742,19 @@
       let added = false;
       for (const row of rows) {
         const id = lineId(row);
-        const text = lineText(row);
-        if (!text) continue;
+        const parsed = parseSoiRow(row);
+        const text = parsed.text || lineText(row);
+        if (!text && !parsed.event) continue;
         if (id && id <= lastSoiId) continue;
         if (id) lastSoiId = id;
-        soiOut.textContent += (soiOut.textContent ? "\n" : "") + text;
+        if (text) soiOut.textContent += (soiOut.textContent ? "\n" : "") + text;
+        appendSoiCard(parsed);
         added = true;
       }
-      if (added) soiOut.scrollTop = soiOut.scrollHeight;
+      if (added) {
+        soiOut.scrollTop = soiOut.scrollHeight;
+        soiFeed.scrollTop = soiFeed.scrollHeight;
+      }
     }
 
     function setSoiUi(running) {
@@ -471,8 +842,11 @@
 
     soiBtn.addEventListener("click", async () => {
       setSoiUi(true);
-      soiOut.textContent += (soiOut.textContent ? "\n" : "") + "Starting SOI…";
+      const kick = { event: "idle_wake", phase: "filing", text: "Starting SOI…" };
+      soiOut.textContent += (soiOut.textContent ? "\n" : "") + kick.text;
+      appendSoiCard(kick);
       soiOut.scrollTop = soiOut.scrollHeight;
+      soiFeed.scrollTop = soiFeed.scrollHeight;
       try {
         const data = await post("/api/soi", {});
         if (!data.ok) {
