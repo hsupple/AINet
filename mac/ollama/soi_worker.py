@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ainet.tools import changelog
 from ainet.tools import readlog
@@ -15,6 +16,7 @@ from ollama.client import OllamaClient, OllamaError
 from ollama.config import OllamaConfig
 from ollama.modes import get_mode
 from ollama.session import ChatSession
+from ollama.soi_log import SOILogger
 
 
 def _utc_now() -> str:
@@ -22,7 +24,14 @@ def _utc_now() -> str:
 
 
 class SOIWorker:
-    def __init__(self, config: OllamaConfig | None = None, client: OllamaClient | None = None) -> None:
+    def __init__(
+        self,
+        config: OllamaConfig | None = None,
+        client: OllamaClient | None = None,
+        *,
+        on_status: Callable[[str], None] | None = None,
+        logger: SOILogger | None = None,
+    ) -> None:
         self.config = config or OllamaConfig.from_env()
         self.client = client or OllamaClient(self.config)
         self.db = DatabaseTools(self.config.db_root)
@@ -32,6 +41,7 @@ class SOIWorker:
         self.state_path = self.state_dir / "state.json"
         # Legacy cursor kept for migration/debug; pending uses per-entry soi_status.
         self.cursor_path = self.state_dir / "cursor.json"
+        self.log = logger or SOILogger(self.config.db_root, on_status=on_status)
 
     # ---- pending queues ----------------------------------------------------
 
@@ -71,10 +81,17 @@ class SOIWorker:
         inbox = self.pending_inbox()
         if not changelog_pending and not inbox:
             self._merge_state({"status": "idle", "phase": "filing", "reason": "no pending work"})
+            self.log.log("filing_skip", reason="no pending work")
             return {"ok": True, "ran": False, "phase": "filing", "reason": "no pending work"}
 
         batch_changelog = changelog_pending[:40]
         batch_inbox = inbox[:40]
+        self.log.log(
+            "filing_start",
+            pending_changelog=len(batch_changelog),
+            pending_inbox=len(batch_inbox),
+            entry_ids=[e.get("id") for e in batch_changelog if e.get("id")],
+        )
         payload = {
             "phase": "filing",
             "changelog_entries": batch_changelog,
@@ -96,6 +113,7 @@ class SOIWorker:
         reply, err = self._ask_soi(payload)
         if err:
             self._merge_state({"status": "error", "phase": "filing", "error": err})
+            self.log.log("filing_error", level="error", error=err)
             return {"ok": False, "ran": True, "phase": "filing", "error": err}
 
         # Host marks changelog handoffs processed so they leave the pending set.
@@ -128,7 +146,7 @@ class SOIWorker:
                 "reply_preview": (reply or "")[:400],
             }
         )
-        return {
+        out = {
             "ok": True,
             "ran": True,
             "phase": "filing",
@@ -138,6 +156,14 @@ class SOIWorker:
             "seen_inbox": len(batch_inbox),
             "reply": reply,
         }
+        self.log.log(
+            "filing_done",
+            marked_filed=marked_filed,
+            marked_discarded=marked_discarded,
+            seen_inbox=len(batch_inbox),
+            reply_preview=(reply or "")[:200],
+        )
+        return out
 
     def run_once(self) -> dict[str, Any]:
         """Back-compat: run filing phase."""
@@ -167,6 +193,7 @@ class SOIWorker:
 
     def run_read_refresh(self) -> dict[str, Any]:
         if self.has_filing_work():
+            self.log.log("read_refresh_skip", reason="filing still pending")
             return {
                 "ok": True,
                 "ran": False,
@@ -184,6 +211,7 @@ class SOIWorker:
                     "reason": "no stale Reads",
                 }
             )
+            self.log.log("read_refresh_skip", reason="no stale Reads (needs_update=false)")
             return {
                 "ok": True,
                 "ran": False,
@@ -192,6 +220,12 @@ class SOIWorker:
             }
 
         grouped = self.reads_by_domain(stale)
+        self.log.log(
+            "read_refresh_start",
+            stale_count=len(stale),
+            domains=list(grouped.keys()),
+            stale=stale,
+        )
         replies: dict[str, str] = {}
         errors: dict[str, str] = {}
         refreshed: list[str] = []
@@ -207,6 +241,7 @@ class SOIWorker:
         )
 
         for domain, reads in grouped.items():
+            self.log.log("read_refresh_domain", domain=domain, paths=reads)
             payload = {
                 "phase": "read_refresh",
                 "domain": domain,
@@ -226,6 +261,12 @@ class SOIWorker:
             reply, err = self._ask_soi(payload)
             if err:
                 errors[domain] = err
+                self.log.log(
+                    "read_refresh_error",
+                    level="error",
+                    error=err,
+                    domain=domain,
+                )
             else:
                 replies[domain] = (reply or "")[:400]
                 # Host safety net: clear gate for paths still marked stale after a successful run.
@@ -261,7 +302,7 @@ class SOIWorker:
                 "reply_previews": replies,
             }
         )
-        return {
+        out = {
             "ok": ok,
             "ran": True,
             "phase": "read_refresh",
@@ -272,6 +313,14 @@ class SOIWorker:
             "errors": errors,
             "replies": replies,
         }
+        self.log.log(
+            "read_refresh_done",
+            level="error" if not ok else "info",
+            refreshed=refreshed,
+            stale_remaining=remaining,
+            errors=errors or None,
+        )
+        return out
 
     # ---- helpers -----------------------------------------------------------
 
@@ -283,13 +332,84 @@ class SOIWorker:
             auto_mode=False,
             persist_conversation=False,
         )
+
+        def on_tool(phase: str, name: str, detail: dict[str, Any]) -> None:
+            if phase == "start":
+                args_obj = detail.get("arguments") or {}
+                hint = ""
+                for key in ("query", "path", "url", "q", "title", "slug"):
+                    if key in args_obj and args_obj[key]:
+                        hint = f" {key}={args_obj[key]!r}"
+                        break
+                if not hint and args_obj:
+                    raw = json.dumps(args_obj, ensure_ascii=False)
+                    hint = f" {raw[:100]}{'…' if len(raw) > 100 else ''}"
+                self.log.log("tool_start", name=name, hint=hint, arguments=args_obj)
+            elif phase == "done":
+                self.log.log(
+                    "tool_done",
+                    name=name,
+                    ok=bool(detail.get("ok", True)),
+                    summary=detail.get("summary") or "",
+                )
+
+        thinking_open = False
+        content_open = False
+
+        def on_thinking(delta: str) -> None:
+            nonlocal thinking_open, content_open
+            if not thinking_open:
+                if content_open:
+                    sys.stdout.write("\n")
+                    content_open = False
+                sys.stdout.write("\n(SOI thinking)\n")
+                thinking_open = True
+            sys.stdout.write(delta)
+            sys.stdout.flush()
+
+        def on_token(delta: str) -> None:
+            nonlocal thinking_open, content_open
+            if thinking_open:
+                sys.stdout.write("\n(SOI reply)\n")
+                thinking_open = False
+            if not content_open:
+                content_open = True
+            sys.stdout.write(delta)
+            sys.stdout.flush()
+
+        phase = payload.get("phase") or "soi"
+        self.log.log(
+            "model_ask",
+            phase=phase,
+            domain=payload.get("domain"),
+            timeout_s=self.config.soi_timeout_s,
+            think=self.config.soi_think,
+            stream=True,
+        )
         try:
             reply = session.ask(
                 "SOI job — process this batch:\n"
-                + json.dumps(payload, ensure_ascii=False, indent=2)
+                + json.dumps(payload, ensure_ascii=False, indent=2),
+                stream=True,
+                on_token=on_token,
+                on_thinking=on_thinking,
+                on_tool=on_tool,
+            )
+            if thinking_open or content_open:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            self.log.log(
+                "model_reply",
+                phase=phase,
+                chars=len(reply or ""),
+                preview=(reply or "")[:240],
             )
             return reply, None
         except OllamaError as exc:
+            if thinking_open or content_open:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            self.log.log("model_error", level="error", phase=phase, error=str(exc))
             return None, str(exc)
 
     def _parse_discarded_ids(self, reply: str | None, known_ids: list[str]) -> set[str]:

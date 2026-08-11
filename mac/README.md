@@ -10,7 +10,7 @@ This folder is self-contained: `ainet/`, `ollama/`, and `db/` live here. The rep
 
 ## Setup
 
-1. Install [Ollama](https://ollama.com) for Mac and pull a model (e.g. `ollama pull llama3.2`).
+1. Install [Ollama](https://ollama.com) for Mac (or `brew install ollama` + `brew services start ollama`) and pull a model (default: `ollama pull qwen3:8b`).
 2. From this directory:
 
 ```bash
@@ -25,7 +25,7 @@ export BRAVE_API_KEY="your_token_here"   # optional; for web_search
 ```bash
 cd mac
 
-# OAC live chat (SOI wakes after idle)
+# OAC live chat (streams tokens; shows tool calls; SOI wakes after idle)
 ./chat.sh
 ./chat.sh --mode research --topic "ATP Synthase"
 
@@ -33,10 +33,18 @@ cd mac
 ./ainet.sh list-tools
 ./ainet.sh call list_dir '{"path":"."}'
 
+# Brave search smoke test (needs BRAVE_API_KEY)
+./test_search.sh
+./test_search.sh --fetch "ATP synthase"
+# Does OAC actually call web_search?
+./test_ai_search.sh
+
+
 # SOI
-./chat.sh  # includes idle SOI
+./chat.sh  # includes idle SOI + live SOI logs in the chat
 python3 -m ollama soi-status
 python3 -m ollama soi-run --phase auto
+# Persistent log: mac/db/runtime/soi/events.jsonl
 ```
 
 Always run with `mac/` as the working directory (or `PYTHONPATH` including this folder) so `db/` resolves to `mac/db`.

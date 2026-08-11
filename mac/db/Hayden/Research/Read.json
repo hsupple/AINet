@@ -15,14 +15,15 @@
   "known_facts": [],
   "uncertainties": [],
   "last_updated": "",
-  "needs_update": true,
+  "needs_update": false,
   "read_changelog": [
     {
       "id": "d6367f140e49",
       "at": "2026-08-08T20:36:58+00:00",
       "summary": "Research conversation sessions",
       "source_path": "Hayden/Research/Sessions",
-      "status": "pending"
+      "status": "consumed",
+      "consumed_at": "2026-08-10T04:39:08+00:00"
     }
   ]
 }

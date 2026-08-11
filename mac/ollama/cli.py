@@ -40,6 +40,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default=None, help="Ollama base URL")
     parser.add_argument("--model", default=None, help="Model name")
     parser.add_argument("--db", type=Path, default=None, help="Database root")
+    parser.add_argument(
+        "--oac-think",
+        dest="oac_think",
+        action="store_true",
+        default=None,
+        help="Enable Qwen3 thinking for OAC (default off)",
+    )
+    parser.add_argument(
+        "--no-oac-think",
+        dest="oac_think",
+        action="store_false",
+        help="Disable Qwen3 thinking for OAC",
+    )
+    parser.add_argument(
+        "--soi-think",
+        dest="soi_think",
+        action="store_true",
+        default=None,
+        help="Enable Qwen3 thinking for SOI (default off)",
+    )
+    parser.add_argument(
+        "--no-soi-think",
+        dest="soi_think",
+        action="store_false",
+        help="Disable Qwen3 thinking for SOI",
+    )
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -90,6 +116,10 @@ def main(argv: list[str] | None = None) -> int:
         updates["model"] = args.model
     if args.db:
         updates["db_root"] = args.db
+    if getattr(args, "oac_think", None) is not None:
+        updates["oac_think"] = args.oac_think
+    if getattr(args, "soi_think", None) is not None:
+        updates["soi_think"] = args.soi_think
     if getattr(args, "auto_mode", None) is not None:
         updates["auto_mode"] = args.auto_mode
     if getattr(args, "no_soi", False):
@@ -150,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "soi-status":
-        worker = SOIWorker(config)
+        worker = SOIWorker(config, on_status=lambda msg: print(msg, flush=True))
         state = None
         if worker.state_path.exists():
             try:
@@ -168,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                     "needs_read_refresh": worker.needs_read_refresh(),
                     "read_json_count": len(worker.list_read_json_paths()),
                     "state_file": str(worker.state_path),
+                    "log_file": str(worker.log.path),
                     "state": state,
                 },
                 indent=2,
@@ -176,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "soi-run":
-        worker = SOIWorker(config)
+        worker = SOIWorker(config, on_status=lambda msg: print(msg, flush=True))
         phase = getattr(args, "phase", "auto")
         if phase == "filing":
             result = worker.run_filing()
@@ -189,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
                 result = worker.run_read_refresh()
             else:
                 result = {"ok": True, "ran": False, "reason": "no filing or read-refresh work"}
+                print("(SOI: no filing or read-refresh work)", flush=True)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0 if result.get("ok") else 1
 
@@ -209,13 +241,47 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.topic:
             print(f"(topic bound: {session.topic['path']})")
+
+        def _on_token(delta: str) -> None:
+            sys.stdout.write(delta)
+            sys.stdout.flush()
+
+        def _on_tool(phase: str, name: str, detail: dict) -> None:
+            if phase == "start":
+                args_obj = detail.get("arguments") or {}
+                # Keep banner short — prefer query/path/url keys.
+                hint = ""
+                for key in ("query", "path", "url", "q"):
+                    if key in args_obj and args_obj[key]:
+                        hint = f" {key}={args_obj[key]!r}"
+                        break
+                if not hint and args_obj:
+                    raw = json.dumps(args_obj, ensure_ascii=False)
+                    hint = f" {raw[:120]}{'…' if len(raw) > 120 else ''}"
+                print(f"\n(tool → {name}{hint})", flush=True)
+            elif phase == "done":
+                ok = detail.get("ok", True)
+                summary = detail.get("summary") or ""
+                mark = "✓" if ok else "✗"
+                print(f"(tool {mark} {name}: {summary})", flush=True)
+
+        def _ask_live(text: str) -> str:
+            reply = session.ask(
+                text,
+                stream=True,
+                on_token=_on_token,
+                on_tool=_on_tool,
+            )
+            # End the turn on its own line after streamed tokens / tool banners.
+            print(flush=True)
+            return reply
+
         if args.message is not None:
             try:
-                reply = session.ask(args.message)
+                _ask_live(args.message)
             except OllamaError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 1
-            print(reply)
             return 0
 
         watcher = IdleSOIWatcher(
@@ -234,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"oac_session={session.session_id}")
         if session.topic:
             print(f"topic={session.topic['title']}  path={session.topic['path']}")
+        print(f"soi_log={config.db_root}/runtime/soi/events.jsonl")
         print("Commands: /exit  /reset  /mode <id>  /auto  /topic <title>  /soi")
         try:
             while True:
@@ -257,7 +324,13 @@ def main(argv: list[str] | None = None) -> int:
                     print("(auto flavor on)")
                     continue
                 if line == "/soi":
-                    result = SOIWorker(config).run_once()
+                    if watcher.busy:
+                        print("(SOI already running — wait for it to finish)")
+                        continue
+                    result = SOIWorker(
+                        config,
+                        on_status=lambda msg: print(msg, flush=True),
+                    ).run_once()
                     print(json.dumps(result, indent=2, ensure_ascii=False))
                     session.touch()
                     continue
@@ -282,12 +355,13 @@ def main(argv: list[str] | None = None) -> int:
                     info = session.bind_topic(title)
                     print(f"(topic bound: {info['path']}; mode={session.mode.id})")
                     continue
+                if watcher.busy:
+                    print("(note: SOI is filing — reply may be slow or time out)")
                 try:
-                    reply = session.ask(line)
+                    _ask_live(line)
                 except OllamaError as exc:
                     print(f"error: {exc}")
                     continue
-                print(reply)
         finally:
             watcher.stop()
         return 0

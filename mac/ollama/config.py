@@ -14,9 +14,14 @@ def default_db_root() -> Path:
 @dataclass(frozen=True)
 class OllamaConfig:
     host: str = "http://127.0.0.1:11434"
-    model: str = "llama3.2"
+    model: str = "qwen3:8b"
+    # Qwen3 thinking: always off by default (OAC + SOI)
+    oac_think: bool = False
+    soi_think: bool = False
     db_root: Path = field(default_factory=default_db_root)
     timeout_s: float = 120.0
+    # SOI with tools can still take a while on 8B
+    soi_timeout_s: float = 600.0
     max_tool_rounds: int = 8
     # Token discipline
     auto_mode: bool = True
@@ -37,9 +42,12 @@ class OllamaConfig:
         db = os.environ.get("AINET_DB")
         return cls(
             host=os.environ.get("AINET_OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/"),
-            model=os.environ.get("AINET_OLLAMA_MODEL", "llama3.2"),
+            model=os.environ.get("AINET_OLLAMA_MODEL", "qwen3:8b"),
+            oac_think=os.environ.get("AINET_OAC_THINK", "0") not in {"0", "false", "False"},
+            soi_think=os.environ.get("AINET_SOI_THINK", "0") not in {"0", "false", "False"},
             db_root=Path(db) if db else default_db_root(),
             timeout_s=float(os.environ.get("AINET_OLLAMA_TIMEOUT", "120")),
+            soi_timeout_s=float(os.environ.get("AINET_SOI_TIMEOUT", "600")),
             max_tool_rounds=int(os.environ.get("AINET_OLLAMA_MAX_TOOL_ROUNDS", "8")),
             auto_mode=os.environ.get("AINET_AUTO_MODE", "1") not in {"0", "false", "False"},
             auto_mode_min_confidence=float(os.environ.get("AINET_AUTO_MODE_MIN_CONF", "0.7")),

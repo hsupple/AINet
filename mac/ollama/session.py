@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from typing import Any
 
 from ainet.tools.ops import DatabaseTools
 from ainet.tools.registry import catalog_tools, dispatch, tools_subset
-from ollama.client import OllamaClient
+from ollama.client import OllamaClient, ThinkingCallback, TokenCallback
 from ollama.config import OllamaConfig
 from ollama.conversation_store import ConversationStore
 from ollama.modes import get_mode
 from ollama.modes.base import QUIZ_TOOLS, READ_TOOLS, Mode
 from ollama.router import suggest_mode
 from ollama.topics import ensure_topic, load_topic_context
+
+# on_tool(phase, name, detail) — phase is "start" | "done"
+ToolCallback = Callable[[str, str, dict[str, Any]], None]
 
 
 _MUTATING = {
@@ -142,17 +146,56 @@ class ChatSession:
         self.touch()
         return self.topic
 
-    def ask(self, user_text: str) -> str:
+    def ask(
+        self,
+        user_text: str,
+        *,
+        stream: bool = False,
+        on_token: TokenCallback | None = None,
+        on_thinking: ThinkingCallback | None = None,
+        on_tool: ToolCallback | None = None,
+    ) -> str:
         self.touch()
         route_note = self._maybe_autoroute(user_text)
+        if route_note and on_token is not None:
+            # Stream path: emit route note as its own line before tokens.
+            on_token(f"{route_note}\n")
+
         self.messages.append({"role": "user", "content": user_text})
         self._trim_history()
 
         tools = self._active_tools()
         final_text = ""
+        streamed_any = False
+        think = self.config.soi_think if self.mode.role == "soi" else self.config.oac_think
+        # SOI jobs (esp. with thinking) need a longer socket timeout.
+        req_timeout = (
+            self.config.soi_timeout_s if self.mode.role == "soi" else self.config.timeout_s
+        )
+
+        def _token(delta: str) -> None:
+            nonlocal streamed_any
+            streamed_any = True
+            if on_token:
+                on_token(delta)
 
         for _ in range(self.config.max_tool_rounds):
-            response = self.client.chat(self.messages, tools=tools)
+            if stream or on_token or on_thinking:
+                response = self.client.chat_stream(
+                    self.messages,
+                    tools=tools,
+                    think=think,
+                    on_token=_token if on_token else None,
+                    on_thinking=on_thinking,
+                    timeout_s=req_timeout,
+                )
+            else:
+                response = self.client.chat(
+                    self.messages,
+                    tools=tools,
+                    think=think,
+                    timeout_s=req_timeout,
+                )
             message = response.get("message") or {}
             self.messages.append(message)
 
@@ -161,12 +204,31 @@ class ChatSession:
                 final_text = (message.get("content") or "").strip()
                 break
 
+            # Finish the streamed line before tool banners.
+            if streamed_any and on_token:
+                on_token("\n")
+                streamed_any = False
+            elif streamed_any and on_thinking and not on_token:
+                # Thinking-only stream still needs a visual break before tools.
+                on_thinking("\n")
+
             for call in tool_calls:
+                name, args = self._tool_call_parts(call)
+                if on_tool:
+                    on_tool("start", name, {"arguments": args})
                 result = self._run_tool_call(call)
-                name = ((call.get("function") or {}).get("name") or "")
                 if name in {"get_tools", "getTools"}:
                     self.full_tools_unlocked = True
                     tools = self._active_tools()
+                if on_tool:
+                    on_tool(
+                        "done",
+                        name,
+                        {
+                            "ok": bool(result.get("ok", True)),
+                            "summary": self._tool_result_summary(name, result),
+                        },
+                    )
                 payload = self._truncate_tool_result(result)
                 self.messages.append(
                     {
@@ -188,9 +250,51 @@ class ChatSession:
             )
 
         self.touch()
+        # When streaming, tokens were already printed — return text for callers/store only.
+        if stream and on_token is not None:
+            if route_note and final_text:
+                return f"{route_note}\n{final_text}"
+            return final_text or route_note or ""
         if route_note:
             return f"{route_note}\n{final_text}" if final_text else route_note
         return final_text
+
+    @staticmethod
+    def _tool_call_parts(call: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        fn = call.get("function") or {}
+        name = str(fn.get("name") or "")
+        raw_args = fn.get("arguments", {})
+        if isinstance(raw_args, str):
+            try:
+                args = json.loads(raw_args) if raw_args.strip() else {}
+            except json.JSONDecodeError:
+                args = {"_raw": raw_args}
+        elif isinstance(raw_args, dict):
+            args = raw_args
+        else:
+            args = {}
+        return name, args if isinstance(args, dict) else {}
+
+    @staticmethod
+    def _tool_result_summary(name: str, result: dict[str, Any]) -> str:
+        if not result.get("ok", True) and result.get("error"):
+            return str(result["error"])[:160]
+        if name == "web_search":
+            n = result.get("count")
+            if n is None and isinstance(result.get("results"), list):
+                n = len(result["results"])
+            return f"{n} hits" if n is not None else "ok"
+        if name == "web_fetch":
+            text = result.get("text") or ""
+            return f"{len(text)} chars"
+        if name in {"read_json", "read_text"}:
+            path = result.get("path") or ""
+            return path or "ok"
+        if name in {"list_dir", "tree"}:
+            kids = result.get("children") or result.get("entries")
+            if isinstance(kids, list):
+                return f"{len(kids)} entries"
+        return "ok"
 
     def _maybe_autoroute(self, user_text: str) -> str | None:
         if not self.auto_mode or self.mode_locked or self.mode.role != "oac":
