@@ -536,7 +536,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "file_by_id",
             "description": (
                 "SOI preferred filing tool. Pass Changelog entry_id(s) or Inbox inbox_id only — "
-                "the host copies stored user_text/assistant_text. Do NOT paste turn bodies. "
+                "the host copies stored user_text. Do NOT paste turn bodies. "
                 "dest: 'research' | 'identity' | 'voice' | 'psychology' | 'habits' | "
                 "'discard' | a leaf path like Hayden/Preferences/Food.json. File by content, not mode."
             ),
@@ -546,6 +546,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "entry_id": {
                         "type": "string",
                         "description": "One Changelog.json entry id (e.g. ad7b021d33e644d6)",
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "Alias for entry_id",
                     },
                     "entry_ids": {
                         "type": "array",
@@ -560,7 +564,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "'research' | 'identity' | 'voice' | 'psychology' | 'habits' | "
-                            "'discard' | or a db-relative JSON path"
+                            "'discard' (greetings only) | or a Folderrules JSON leaf. "
+                            "Not Inbox. Not a dump for schedules/courses."
                         ),
                     },
                     "subject": {
@@ -790,7 +795,7 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
         ),
         "file_by_id": lambda **kw: file_by_id_mod.file_by_id(
             db,
-            entry_id=str(kw.get("entry_id") or ""),
+            entry_id=str(kw.get("entry_id") or kw.get("id") or ""),
             entry_ids=kw.get("entry_ids"),
             inbox_id=str(kw.get("inbox_id") or ""),
             dest=str(kw.get("dest") or ""),

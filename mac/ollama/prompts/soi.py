@@ -9,7 +9,7 @@ PROMPT = f"""
 Mode: soi
 
 Phase 1 — filing (short OAC idle, default ~45s):
-- Input: pending Changelog oac_turn entries (full user_text in details) + unfiled Inbox captures.
+- Input: pending Changelog oac_turn entries (id, user_text, ts only — no assistant) + unfiled Inbox captures.
 - File lasting info into the correct leaves. Ephemeral noise → discard.
 - Research / topic-bound turns (details.mode_id=research or details.topic set):
   use upsert_research_session to log subject, length, and every detail covered

@@ -13,6 +13,7 @@ Thumbs.db
 Desktop.ini
 *.tmp
 .ainet-*.tmp
+.ainet-db-backup*/
 .ainet-soi-harness*/
 .ainet-soi-harness*.log
 .changelog-*.tmp

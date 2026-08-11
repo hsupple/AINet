@@ -1,10 +1,7 @@
 {
-  "summary": "People index. For a specific person, open Relationships/People/<Name>.json.",
+  "summary": "",
   "state": "",
-  "important_context": [
-    "Index.json",
-    "People/"
-  ],
+  "important_context": [],
   "recent_changes": [],
   "active_items": [],
   "known_facts": [],

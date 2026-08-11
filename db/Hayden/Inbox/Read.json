@@ -1,73 +1,12 @@
 {
-  "summary": "Unsorted lasting scraps. If it matters but has no clear home yet, capture here — do not stuff Hayden/Read.json.",
-  "state": "active",
-  "important_context": [
-    "Captures.json — queue of unfiled scraps for SOI to place later"
-  ],
+  "summary": "",
+  "state": "",
+  "important_context": [],
   "recent_changes": [],
-  "active_items": [
-    "File or discard unfiled captures"
-  ],
+  "active_items": [],
   "known_facts": [],
   "uncertainties": [],
   "last_updated": "",
   "needs_update": false,
-  "read_changelog": [
-    {
-      "id": "9b5f35356b91",
-      "at": "2026-08-08T22:47:59+00:00",
-      "summary": "Campus coffee shop with outlet table",
-      "source_path": "Hayden/Inbox/Captures.json",
-      "status": "consumed",
-      "consumed_at": "2026-08-08T23:15:19+00:00"
-    },
-    {
-      "id": "49d16473d998",
-      "at": "2026-08-08T22:52:48+00:00",
-      "summary": "Inbox capture: The coffee shop near campus has the good outlet table",
-      "source_path": "Hayden/Inbox/Captures.json",
-      "status": "consumed",
-      "consumed_at": "2026-08-08T23:15:19+00:00"
-    },
-    {
-      "id": "0266979c4b31",
-      "at": "2026-08-08T22:52:48+00:00",
-      "summary": "Inbox capture: The coffee shop near campus has the good outlet table",
-      "source_path": "Hayden/Inbox/Captures.json",
-      "status": "consumed",
-      "consumed_at": "2026-08-08T23:15:19+00:00"
-    },
-    {
-      "id": "25da4d7dfdc9",
-      "at": "2026-08-08T22:55:04+00:00",
-      "summary": "Inbox capture: The neighborhood coffee shop has the best drip coffee in town. It's a small spot",
-      "source_path": "Hayden/Inbox/Captures.json",
-      "status": "consumed",
-      "consumed_at": "2026-08-08T23:15:19+00:00"
-    },
-    {
-      "id": "cd4951a208b6",
-      "at": "2026-08-08T22:55:04+00:00",
-      "summary": "Inbox capture: The neighborhood coffee shop has the best drip coffee in town. It's a small spot",
-      "source_path": "Hayden/Inbox/Captures.json",
-      "status": "consumed",
-      "consumed_at": "2026-08-08T23:15:19+00:00"
-    },
-    {
-      "id": "f47a732e0c8d",
-      "at": "2026-08-08T22:55:19+00:00",
-      "summary": "Inbox capture: The neighborhood coffee shop has the best drip coffee in town. It's a small spot",
-      "source_path": "Hayden/Inbox/Captures.json",
-      "status": "consumed",
-      "consumed_at": "2026-08-08T23:15:19+00:00"
-    },
-    {
-      "id": "d1b7adf52404",
-      "at": "2026-08-08T23:07:42+00:00",
-      "summary": "Mark coffee captures filed to Preferences",
-      "source_path": "Hayden/Inbox/Captures.json",
-      "status": "consumed",
-      "consumed_at": "2026-08-08T23:15:19+00:00"
-    }
-  ]
+  "read_changelog": []
 }

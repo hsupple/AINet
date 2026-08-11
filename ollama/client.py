@@ -31,6 +31,7 @@ class OllamaClient:
         model: str | None = None,
         think: bool | None = None,
         timeout_s: float | None = None,
+        options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Non-streaming chat (callers that want a single blob)."""
         return self._chat_request(
@@ -40,6 +41,7 @@ class OllamaClient:
             think=think,
             stream=False,
             timeout_s=timeout_s,
+            options=options,
         )
 
     def chat_stream(
@@ -52,6 +54,7 @@ class OllamaClient:
         on_token: TokenCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
         timeout_s: float | None = None,
+        options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Stream assistant tokens (+ optional thinking); return final chat shape."""
         return self._chat_request(
@@ -63,6 +66,7 @@ class OllamaClient:
             on_token=on_token,
             on_thinking=on_thinking,
             timeout_s=timeout_s,
+            options=options,
         )
 
     def _chat_request(
@@ -76,6 +80,7 @@ class OllamaClient:
         on_token: TokenCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
         timeout_s: float | None = None,
+        options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         use_think = bool(self.config.oac_think if think is None else think)
         wait = float(self.config.timeout_s if timeout_s is None else timeout_s)
@@ -88,6 +93,8 @@ class OllamaClient:
         }
         if tools:
             payload["tools"] = tools
+        if options:
+            payload["options"] = options
 
         url = f"{self.config.host}/api/chat"
         data = json.dumps(payload).encode("utf-8")

@@ -1,10 +1,7 @@
 {
-  "summary": "AINet project hot surface.",
+  "summary": "",
   "state": "",
-  "important_context": [
-    "ESP32 mic/speaker pipeline",
-    "Windows PC runs Ollama + ainet tools"
-  ],
+  "important_context": [],
   "recent_changes": [],
   "active_items": [],
   "known_facts": [],

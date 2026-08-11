@@ -29,6 +29,7 @@ class IdleSOIWatcher:
         self.error_backoff_s = error_backoff_s
         self._stop = threading.Event()
         self._kick = threading.Event()
+        self._active = threading.Event()
         self._busy = threading.Lock()
         self._next_ok_at = 0.0
         self._thread = threading.Thread(target=self._loop, name="soi-idle", daemon=True)
@@ -39,7 +40,7 @@ class IdleSOIWatcher:
 
     @property
     def running(self) -> bool:
-        return self.busy or self._kick.is_set()
+        return self._active.is_set() or self.busy or self._kick.is_set()
 
     def start(self, *, force: bool = False) -> bool:
         if not force and not self.config.soi_enabled:
@@ -57,12 +58,14 @@ class IdleSOIWatcher:
             return {"started": False, "reason": "watcher failed to start"}
         if self.busy:
             return {"started": False, "reason": "already running"}
+        self._active.set()
         self._kick.set()
         return {"started": True}
 
     def stop(self) -> None:
         self._stop.set()
         self._kick.set()
+        self._active.clear()
 
     def _loop(self) -> None:
         logger = SOILogger(self.config.db_root, on_status=self.on_status)
@@ -106,6 +109,15 @@ class IdleSOIWatcher:
                             seconds=self.error_backoff_s,
                             reason=result.get("error") or "filing failed",
                         )
+                    elif int(result.get("left_pending") or 0) and not int(
+                        result.get("marked_filed") or 0
+                    ) and not int(result.get("marked_discarded") or 0):
+                        self._next_ok_at = time.monotonic() + self.error_backoff_s
+                        logger.log(
+                            "backoff",
+                            seconds=self.error_backoff_s,
+                            reason="filing produced no placements",
+                        )
                     continue
 
                 if (
@@ -133,3 +145,5 @@ class IdleSOIWatcher:
                 logger.log("backoff", seconds=self.error_backoff_s, reason=str(exc))
             finally:
                 self._busy.release()
+                if kicked:
+                    self._active.clear()

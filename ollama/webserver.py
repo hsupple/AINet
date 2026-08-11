@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections import deque
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from ollama.client import OllamaError
 from ollama.config import OllamaConfig
@@ -28,7 +29,8 @@ class ChatApp:
     def __init__(self, config: OllamaConfig, mode_id: str = DEFAULT_MODE_ID) -> None:
         self.config = config
         self.lock = threading.RLock()
-        self.soi_log: deque[str] = deque(maxlen=20)
+        self._soi_seq = 0
+        self.soi_log: deque[dict[str, Any]] = deque(maxlen=500)
         self.session = ChatSession(
             mode=get_mode(mode_id),
             config=config,
@@ -37,10 +39,22 @@ class ChatApp:
         self.watcher = IdleSOIWatcher(
             self.session,
             config,
-            on_status=lambda msg: self.soi_log.append(msg),
+            on_status=self._append_soi_log,
         )
         if config.soi_enabled:
             self.watcher.start()
+
+    def _append_soi_log(self, msg: str) -> None:
+        text = str(msg or "").rstrip()
+        if not text:
+            return
+        with self.lock:
+            self._soi_seq += 1
+            self.soi_log.append({"id": self._soi_seq, "text": text})
+
+    def soi_lines_after(self, after_id: int = 0) -> list[dict[str, Any]]:
+        with self.lock:
+            return [row for row in self.soi_log if int(row.get("id") or 0) > after_id]
 
     def status(self) -> dict[str, Any]:
         with self.lock:
@@ -62,6 +76,7 @@ class ChatApp:
                     if m.role == "oac"
                 ],
                 "soi_log": list(self.soi_log),
+                "soi_log_seq": self._soi_seq,
             }
 
     def ask(self, text: str) -> dict[str, Any]:
@@ -154,7 +169,9 @@ def make_handler(app: ChatApp):
             self.end_headers()
 
         def do_GET(self) -> None:  # noqa: N802
-            path = urlparse(self.path).path
+            parsed = urlparse(self.path)
+            path = parsed.path
+            qs = parse_qs(parsed.query)
             if path in {"/", "/index.html"}:
                 html = (_STATIC / "index.html").read_bytes()
                 self._send(200, html, "text/html; charset=utf-8")
@@ -168,6 +185,49 @@ def make_handler(app: ChatApp):
                 status, body, ctype = _json_bytes(app.status())
                 self._send(status, body, ctype)
                 return
+            if path == "/api/soi-log":
+                try:
+                    after = int((qs.get("after") or ["0"])[0] or 0)
+                except ValueError:
+                    after = 0
+                payload = {
+                    "ok": True,
+                    "soi_running": app.watcher.running,
+                    "lines": app.soi_lines_after(after),
+                }
+                status, body, ctype = _json_bytes(payload)
+                self._send(status, body, ctype)
+                return
+            if path == "/api/soi-stream":
+                try:
+                    after = int((qs.get("after") or ["0"])[0] or 0)
+                except ValueError:
+                    after = 0
+                self.send_response(200)
+                self._cors()
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                try:
+                    while True:
+                        rows = app.soi_lines_after(after)
+                        if rows:
+                            after = int(rows[-1].get("id") or after)
+                        blob = json.dumps(
+                            {
+                                "lines": rows,
+                                "soi_running": app.watcher.running,
+                                "seq": after,
+                            },
+                            ensure_ascii=False,
+                        )
+                        self.wfile.write(f"data: {blob}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                        time.sleep(0.35)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                    return
             self._send(404, b'{"ok":false,"error":"not found"}', "application/json")
 
         def do_POST(self) -> None:  # noqa: N802

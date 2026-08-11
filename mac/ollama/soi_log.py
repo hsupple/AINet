@@ -28,6 +28,9 @@ class SOILogger:
         "read_refresh_error",
         "tool_start",
         "tool_done",
+        "model_ask",
+        "model_reply",
+        "model_error",
         "error",
         "backoff",
         "watcher_start",
@@ -104,6 +107,19 @@ class SOILogger:
             mark = "✓" if fields.get("ok", True) else "✗"
             summary = fields.get("summary") or ""
             return f"(SOI tool {mark} {name}: {summary})"
+        if event == "model_ask":
+            return (
+                f"(SOI model ask phase={fields.get('phase', 'soi')} "
+                f"think={fields.get('think', False)})"
+            )
+        if event == "model_reply":
+            preview = str(fields.get("preview") or "").strip()
+            n = fields.get("chars", len(preview))
+            tools = fields.get("mutating_calls", 0)
+            head = f"(SOI model reply {n} chars, mutating={tools})"
+            return f"{head}\n{preview}" if preview else head
+        if event == "model_error":
+            return f"(SOI model error: {fields.get('error', 'unknown')})"
         if event == "idle_wake":
             return (
                 f"(SOI wake: phase={fields.get('phase')} "

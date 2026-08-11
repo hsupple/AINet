@@ -1,11 +1,9 @@
 {
-  "name": "Work",
-  "type": "domain",
-  "description": "Work domain COP.",
+  "name": "",
+  "type": "",
+  "description": "",
   "created_at": "",
-  "status": "active",
+  "status": "",
   "tags": [],
-  "related_paths": [
-    "Work/Projects/AINet"
-  ]
+  "related_paths": []
 }

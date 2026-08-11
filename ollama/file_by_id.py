@@ -11,6 +11,7 @@ from ainet.tools.ops import DatabaseTools
 from ollama.content_filing import (
     content_kind,
     family_title_from_text,
+    is_ephemeral_text,
     is_research_followup,
     topic_title_from_text,
 )
@@ -33,6 +34,17 @@ def _entry_text(entry: dict[str, Any]) -> tuple[str, str]:
     user = str(details.get("user_text") or entry.get("summary") or "").strip()
     assistant = str(details.get("assistant_text") or "").strip()
     return user, assistant
+
+
+_NAMED_DEST_KINDS = {
+    "research": {"research"},
+    "session": {"research"},
+    "identity": {"identity"},
+    "personality": {"identity"},
+    "voice": {"voice", "identity"},
+    "psychology": {"psychology"},
+    "habits": {"habits"},
+}
 
 
 def _qualify_dest(dest: str) -> str:
@@ -129,11 +141,49 @@ def file_by_id(
         return {"ok": False, "error": "entry_id or entry_ids required"}
 
     dest_norm = dest_raw.lower().strip()
+    first = changelog.get_entry(db.paths, ids[0])
+    user0, asst0 = _entry_text(first or {})
+    kind0 = content_kind(user0, asst0)
+    allowed = _NAMED_DEST_KINDS.get(dest_norm)
+    researchish = dest_norm in {"research", "session"} or dest_raw.replace("\\", "/").startswith(
+        "Hayden/Research"
+    )
+    if (allowed and kind0 not in allowed) or (
+        researchish and kind0 != "research" and not is_research_followup(user0)
+    ):
+        return {
+            "ok": False,
+            "error": (
+                f"dest={dest_raw} refused — this turn is {kind0}. "
+                "Inspect domain_snapshot / Folderrules (School, Work, Household, Hayden). "
+                "If that domain is missing COPs/folders the text needs, create_cop or write_json there."
+            ),
+            "entry_ids": ids,
+        }
     if dest_norm in {"discard", "ephemeral", "drop"}:
+        lasting: list[str] = []
+        ephemeral: list[str] = []
+        for eid in ids:
+            entry = changelog.get_entry(db.paths, eid)
+            user, _asst = _entry_text(entry or {})
+            if is_ephemeral_text(user):
+                ephemeral.append(eid)
+            else:
+                lasting.append(eid)
+        if lasting:
+            return {
+                "ok": False,
+                "error": (
+                    "dest=discard refused — these turns have lasting content "
+                    f"({', '.join(lasting)}). Use create_cop / write_json / a Folderrules leaf. "
+                    "discard is only for hi/thanks/gg."
+                ),
+                "entry_ids": lasting,
+            }
         return {
             "ok": True,
             "action": "discard",
-            "entry_ids": ids,
+            "entry_ids": ephemeral,
             "note": "Host will archive these to Masterlog.json and drop them from the Changelog queue.",
         }
 
@@ -171,16 +221,6 @@ def file_by_id(
             return {"ok": False, "error": f"Unknown changelog id: {ids[0]}"}
         user, asst = _entry_text(first)
         details = first.get("details") if isinstance(first.get("details"), dict) else {}
-        kind = content_kind(user, asst)
-        if kind != "research" and not is_research_followup(user):
-            return {
-                "ok": False,
-                "error": (
-                    f"dest=research refused — this turn is {kind}, not a research Q&A. "
-                    "Use create_cop / write_json / a real leaf path."
-                ),
-                "entry_ids": ids,
-            }
         open_subject = latest_open_research_subject(db)
         raw_subject = str(subject or "").strip()
         if raw_subject.lower() in {"research thread", "research"} or "mentioned" in raw_subject.lower():
@@ -239,6 +279,34 @@ def file_by_id(
         }
 
     path = _qualify_dest(dest_raw)
+    path_norm = path.replace("\\", "/")
+    if path_norm.startswith("Hayden/Identity") and kind0 not in {"identity", "voice"}:
+        return {
+            "ok": False,
+            "error": (
+                f"{path_norm} refused — this turn is {kind0}, not identity. "
+                "Inspect domain_snapshot and file in the matching Folderrules domain."
+            ),
+            "entry_ids": ids,
+        }
+    if path_norm.startswith("Hayden/Research") and kind0 != "research" and not is_research_followup(user0):
+        return {
+            "ok": False,
+            "error": (
+                f"{path_norm} refused — this turn is {kind0}, not research. "
+                "Inspect domain_snapshot (School/Work/Household/Hayden) and create_cop / write_json there."
+            ),
+            "entry_ids": ids,
+        }
+    if "Inbox/" in path_norm or path_norm.lower().endswith("inbox/captures.json"):
+        return {
+            "ok": False,
+            "error": (
+                "Inbox is not a filing dest for Changelog turns. "
+                "Use Folderrules (School/, Work/, Hayden/ leaves) or create_cop."
+            ),
+            "entry_ids": ids,
+        }
     if not path.endswith(".json"):
         return {
             "ok": False,

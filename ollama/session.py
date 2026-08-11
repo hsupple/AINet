@@ -10,6 +10,7 @@ from typing import Any
 from ainet.tools.ops import DatabaseTools
 from ainet.tools.registry import catalog_tools, dispatch, tools_subset
 from ollama.client import OllamaClient, ThinkingCallback, TokenCallback
+from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
 from ollama.conversation_store import ConversationStore
 from ollama.modes import get_mode
@@ -187,8 +188,9 @@ class ChatSession:
             "start_quiz",
             "record_quiz_answer",
         }
+        soi_opts = {"temperature": 0} if self.mode.role == "soi" else None
 
-        for _ in range(self.config.max_tool_rounds):
+        for _round in range(self.config.max_tool_rounds):
             if stream or on_token or on_thinking:
                 response = self.client.chat_stream(
                     self.messages,
@@ -197,6 +199,7 @@ class ChatSession:
                     on_token=_token if on_token else None,
                     on_thinking=on_thinking,
                     timeout_s=req_timeout,
+                    options=soi_opts,
                 )
             else:
                 response = self.client.chat(
@@ -204,14 +207,20 @@ class ChatSession:
                     tools=tools,
                     think=think,
                     timeout_s=req_timeout,
+                    options=soi_opts,
                 )
             message = response.get("message") or {}
             self.messages.append(message)
 
             tool_calls = message.get("tool_calls") or []
+            parsed_from_text = False
             if not tool_calls:
                 final_text = (message.get("content") or "").strip()
-                break
+                if self.mode.role == "soi":
+                    tool_calls = parse_content_tool_calls(final_text)
+                    parsed_from_text = bool(tool_calls)
+                if not tool_calls:
+                    break
 
             self.last_tool_rounds += 1
             if streamed_any and on_token:
@@ -222,6 +231,9 @@ class ChatSession:
 
             for call in tool_calls:
                 name, args = self._tool_call_parts(call)
+                if self.mode.role == "soi":
+                    name, args = normalize_soi_tool(name, args)
+                    call = {"function": {"name": name, "arguments": args}}
                 if on_tool:
                     on_tool("start", name, {"arguments": args})
                 result = self._run_tool_call(call)
@@ -254,6 +266,8 @@ class ChatSession:
                         "content": json.dumps(payload, ensure_ascii=False),
                     }
                 )
+            if parsed_from_text:
+                break
             self._trim_history()
         else:
             final_text = "I hit the tool-call limit for this turn. Try again with a narrower ask."
@@ -405,7 +419,23 @@ class ChatSession:
                 ),
             }
 
-        return dispatch(self.db, name, args)
+        result = dispatch(self.db, name, args)
+        if self.mode.role == "soi":
+            result = _redact_assistant_fields(result)
+        return result
+
+
+def _redact_assistant_fields(obj: Any) -> Any:
+    """SOI never sees OAC assistant_text, even via tool reads."""
+    if isinstance(obj, dict):
+        return {
+            k: _redact_assistant_fields(v)
+            for k, v in obj.items()
+            if k not in {"assistant_text", "assistant"}
+        }
+    if isinstance(obj, list):
+        return [_redact_assistant_fields(x) for x in obj]
+    return obj
 
 
 def _guess_topic_title(user_text: str) -> str | None:

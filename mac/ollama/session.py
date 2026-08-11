@@ -382,4 +382,20 @@ class ChatSession:
                 ),
             }
 
-        return dispatch(self.db, name, args)
+        result = dispatch(self.db, name, args)
+        if self.mode.role == "soi":
+            result = _redact_assistant_fields(result)
+        return result
+
+
+def _redact_assistant_fields(obj: Any) -> Any:
+    """SOI never sees OAC assistant_text, even via tool reads."""
+    if isinstance(obj, dict):
+        return {
+            k: _redact_assistant_fields(v)
+            for k, v in obj.items()
+            if k not in {"assistant_text", "assistant"}
+        }
+    if isinstance(obj, list):
+        return [_redact_assistant_fields(x) for x in obj]
+    return obj

@@ -43,14 +43,12 @@ def _entry_user_text(entry: dict[str, Any]) -> str:
 
 
 def _entry_for_soi(entry: dict[str, Any]) -> dict[str, Any]:
-    """Full turn text so SOI can choose tools. id is for file_by_id copies."""
+    """SOI sees id, user text, and time only — never OAC assistant_text."""
     details = entry.get("details") if isinstance(entry.get("details"), dict) else {}
     return {
         "id": entry.get("id"),
-        "summary": entry.get("summary"),
-        "suggested_filing": entry.get("suggested_filing"),
+        "ts": entry.get("ts"),
         "user_text": str(details.get("user_text") or entry.get("summary") or "").strip(),
-        "assistant_text": str(details.get("assistant_text") or "").strip(),
     }
 
 
@@ -249,18 +247,24 @@ class SOIWorker:
         if self.db.paths.resolve("Folderrules.json").exists():
             raw = self.db.read_json("Folderrules.json")["data"]
             if isinstance(raw, dict):
-                layout = raw
+                layout = {
+                    "domains": raw.get("domains"),
+                    "ai_may_create_under": (raw.get("ai_may_create") or {}).get("under"),
+                    "cop_templates": raw.get("cop_templates"),
+                }
+        snapshot = self._domain_snapshot()
         payload = {
             "phase": "filing",
             "folderrules": layout,
+            "domain_snapshot": snapshot,
             "changelog_entries": [_entry_for_soi(e) for e in batch_changelog],
             "inbox_unfiled": [_inbox_for_soi(c) for c in batch_inbox],
             "instructions": (
-                "You have the full user_text/assistant_text for each id, and Folderrules. "
-                "Use create_cop / create_folder / write_json / patch_json / file_by_id to put "
-                "content where that map already says it belongs. "
-                "file_by_id copies stored text by id — do not retype bodies. "
-                "One turn may need several tool calls. Do not invent domains outside Folderrules."
+                "Emit tool_calls. Do not describe the DB in prose. "
+                "Domains are ONLY Hayden, School, Work, Household (not Plans). "
+                "Pick the domain from user_text, list_dir/tree it if needed, then "
+                "create_cop / write_json / patch_json where the snapshot is missing COPs. "
+                "Hayden/Research is how/why questions only. file_by_id copies user text by id."
             ),
         }
 
@@ -303,7 +307,7 @@ class SOIWorker:
             result = call.get("result") if isinstance(call.get("result"), dict) else {}
             dest = str(args.get("dest") or result.get("action") or "").strip().lower()
             ids = [str(x) for x in (args.get("entry_ids") or result.get("entry_ids") or []) if x]
-            eid = str(args.get("entry_id") or "").strip()
+            eid = str(args.get("entry_id") or args.get("id") or "").strip()
             if eid:
                 ids.append(eid)
             for item in ids:
@@ -315,7 +319,14 @@ class SOIWorker:
                         handled_by_id.add(item)
                         discarded_ids.add(item)
                         dest_by_id[item] = ""
-                    # Lasting content: ignore model discard so host can store it.
+                    continue
+                dest_path = str(
+                    result.get("filed_to")
+                    or result.get("path")
+                    or args.get("dest")
+                    or ""
+                ).replace("\\", "/")
+                if "inbox" in dest or "inbox/" in dest_path.lower():
                     continue
                 handled_by_id.add(item)
                 claimed_filed.add(item)
@@ -325,6 +336,24 @@ class SOIWorker:
                     or args.get("dest")
                     or ""
                 )
+
+        for call in stats.get("mutating_calls") or []:
+            if call.get("ok") is False:
+                continue
+            if call.get("tool") not in {"create_cop", "create_folder", "write_json", "patch_json"}:
+                continue
+            args = call.get("args") if isinstance(call.get("args"), dict) else {}
+            path = str(args.get("path") or args.get("folder_path") or "").replace("\\", "/")
+            if not path.startswith(("School/", "Work/", "Household/")):
+                continue
+            for entry in batch_changelog:
+                eid = str(entry.get("id") or "")
+                if not eid or eid in handled_by_id or eid in discarded_ids:
+                    continue
+                if entry.get("suggested_filing") in {"research", "discard"}:
+                    continue
+                handled_by_id.add(eid)
+                dest_by_id[eid] = path
 
         # Host safety nets only for ids SOI did not already place by id.
         leftover = [
@@ -353,7 +382,6 @@ class SOIWorker:
         host_filed_ids.update(str(x) for x in (host_personal.get("filed_ids") or []) if x)
         host_filed_ids.update(k for k, v in dest_by_id.items() if v)
 
-        had_mutations = bool(stats.get("mutating_calls"))
         filed_ids: list[str] = []
         left_pending: list[str] = []
         for entry in batch_changelog:
@@ -363,10 +391,7 @@ class SOIWorker:
             if eid in discarded_ids:
                 continue
             in_session = self._already_in_research_session(eid)
-            if in_session or eid in host_filed_ids:
-                filed_ids.append(eid)
-                continue
-            if had_mutations and eid in claimed_filed:
+            if in_session or eid in host_filed_ids or eid in handled_by_id:
                 filed_ids.append(eid)
                 continue
             if entry.get("suggested_filing") == "research" and self._already_in_research_session(eid):
@@ -406,6 +431,67 @@ class SOIWorker:
             "retries": retries,
             "reply": reply,
         }
+
+    def _domain_snapshot(self) -> dict[str, Any]:
+        """Short path lists only — full Read.json makes Qwen write essays."""
+        snap: dict[str, Any] = {}
+        for domain in ("School", "Work", "Household"):
+            item: dict[str, Any] = {"children": []}
+            if self.db.paths.resolve(domain).exists():
+                try:
+                    listing = self.db.list_dir(domain)
+                    item["children"] = [
+                        str(c.get("path") or c.get("name") or "")
+                        for c in (listing.get("children") or [])
+                        if isinstance(c, dict)
+                    ]
+                except Exception:
+                    item["children"] = []
+            extra = f"{domain}/Courses" if domain == "School" else f"{domain}/Projects"
+            if self.db.paths.resolve(extra).exists():
+                try:
+                    listing = self.db.list_dir(extra)
+                    item["cops"] = [
+                        str(c.get("path") or c.get("name") or "")
+                        for c in (listing.get("children") or [])
+                        if isinstance(c, dict)
+                    ]
+                except Exception:
+                    item["cops"] = []
+            else:
+                item["cops"] = []
+            snap[domain] = item
+        return snap
+
+    def _ids_placed_by_file_by_id(
+        self,
+        stats: dict[str, Any],
+        batch_changelog: list[dict[str, Any]],
+    ) -> set[str]:
+        known = {str(e.get("id") or "") for e in batch_changelog if e.get("id")}
+        placed: set[str] = set()
+        for call in stats.get("mutating_calls") or []:
+            if call.get("tool") != "file_by_id" or call.get("ok") is False:
+                continue
+            args = call.get("args") if isinstance(call.get("args"), dict) else {}
+            result = call.get("result") if isinstance(call.get("result"), dict) else {}
+            dest = str(args.get("dest") or result.get("action") or "").replace("\\", "/").lower()
+            if dest in {"discard", "ephemeral", "drop"} or "inbox" in dest:
+                continue
+            ids = [str(x) for x in (args.get("entry_ids") or result.get("entry_ids") or []) if x]
+            eid = str(args.get("entry_id") or args.get("id") or "").strip()
+            if eid:
+                ids.append(eid)
+            for item in ids:
+                if item in known:
+                    placed.add(item)
+        for call in stats.get("mutating_calls") or []:
+            if call.get("ok") is False:
+                continue
+            if call.get("tool") in {"create_cop", "create_folder", "write_json", "patch_json"}:
+                # Domain tools ran — still need file_by_id or host leftover for ids.
+                continue
+        return placed
 
     def _annotate_suggested_filing(self, batch_changelog: list[dict[str, Any]]) -> None:
         for entry in batch_changelog:
@@ -630,12 +716,20 @@ class SOIWorker:
             stats["mutating_calls"] = list(getattr(session, "last_mutating_calls", []) or [])
             stats["tool_names"] = list(getattr(session, "last_tool_names", []) or [])
             stats["tool_rounds"] = int(getattr(session, "last_tool_rounds", 0) or 0)
+            if not stats["tool_names"]:
+                self.log.log(
+                    "model_no_tools",
+                    phase=phase,
+                    chars=len(reply or ""),
+                    preview=(reply or "")[:240],
+                )
             self.log.log(
                 "model_reply",
                 phase=phase,
                 chars=len(reply or ""),
-                preview=(reply or "")[:240],
+                preview=(reply or "")[:2000],
                 mutating_calls=len(stats["mutating_calls"]),
+                tool_rounds=stats["tool_rounds"],
             )
             return reply, None, stats
         except OllamaError as exc:

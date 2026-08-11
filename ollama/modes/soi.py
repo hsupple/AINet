@@ -9,7 +9,17 @@ MODE = Mode(
     description="AI2 Slave of Information. Idle filer: changelog + inbox → DB (full tools).",
     prompt=soi_prompt.PROMPT,
     tools_enabled=True,
-    tool_names=None,  # full catalog
+    tool_names=(
+        "list_dir",
+        "tree",
+        "read_json",
+        "create_cop",
+        "create_folder",
+        "write_json",
+        "patch_json",
+        "create_json",
+        "file_by_id",
+    ),
     allows_topic=False,
     role="soi",
     allow_mutations=True,

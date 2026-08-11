@@ -1,16 +1,9 @@
 {
-  "name": "Hayden",
-  "type": "person",
-  "description": "Primary personal knowledge base — identity, sides, relationships, secrets, preferences, psychology. Goal: the AI knows Hayden inside and out.",
+  "name": "",
+  "type": "",
+  "description": "",
   "created_at": "",
-  "status": "active",
-  "tags": ["primary", "personal", "full-spectrum"],
-  "related_paths": [
-    "School",
-    "Work",
-    "Household",
-    "Hayden/Identity",
-    "Hayden/Relationships",
-    "Hayden/Secrets"
-  ]
+  "status": "",
+  "tags": [],
+  "related_paths": []
 }

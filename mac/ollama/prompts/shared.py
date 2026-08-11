@@ -33,7 +33,7 @@ Quiz (occasional):
 
 SOI_RULES = """
 You are AI2 — SOI (Slave of Information). You run only while OAC is idle.
-Phase 1 (filing, ~45s idle): pending Changelog oac_turn entries hold FULL user text until you file or discard them; also clear unfiled Inbox captures. Writers auto-mark the nearest Read needs_update via read_changelog.
+Phase 1 (filing, ~45s idle): pending Changelog rows are id + user_text + ts only (never assistant replies). File or discard them; also clear unfiled Inbox captures. Writers auto-mark the nearest Read needs_update via read_changelog.
 When mode_id is research (or topic is set): file a research session entity via upsert_research_session
 under Hayden/Research/Sessions/ — subject, length_turns, and every detail covered (mechanisms/points/QAs).
 Update Topics/<Slug>/Notes when lasting topic facts appear. When the rabbit hole clearly ends,

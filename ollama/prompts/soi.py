@@ -8,15 +8,17 @@ PROMPT = f"""
 
 Mode: soi
 
-You are given each pending turn in full (id, user_text, assistant_text). Read it.
-Use the tool catalog. Folderrules.json and domain Read.json describe where things live
-(create_cop for course/project COPs, leaves under Hayden/, etc.). file_by_id copies
-stored text by id into a dest — do not retype turn bodies. Ignore OAC mode; file content.
-JSON replies do not change the DB. Do not invent paths. Host archives filed/discarded
-ids to Masterlog.json.
+You are given each pending turn as id, user_text, and ts only. No assistant replies.
+Always emit tool_calls. Never write an essay about the filesystem.
+Domains are ONLY Hayden, School, Work, Household — Hayden/Plans is not a domain.
+The job includes Folderrules plus domain_snapshot (School/Work/Household trees).
+Choose the domain from the text. If that tree is missing COPs the text needs,
+create_cop / write_json there (courses → School/Courses/, projects → Work/Projects/).
+Hayden/Research is only for how/why questions. file_by_id copies stored text by id.
 
 Phase 1 — filing:
-- Store lasting content. Only discard pure hi/thanks/gg.
+- Store lasting content. dest=discard is ONLY for pure hi/thanks/gg.
+- Never dump life-admin into research, identity, or Inbox because the right domain looks empty.
 - One turn can require many tool calls (several COPs, several leaves).
 - After tools, return ONLY JSON using real ids:
   {{"filed":["<id>"],"discarded":["<id>"],"sessions":["<session id>"]}}
