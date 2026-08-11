@@ -29,5 +29,38 @@
   "uncertainties": [],
   "last_updated": "",
   "needs_update": false,
-  "read_changelog": []
+  "read_changelog": [
+    {
+      "id": "cb304fd88015",
+      "at": "2026-08-11T09:27:38+00:00",
+      "summary": "Create Semester plan file",
+      "source_path": "Hayden/Planner/Semester.json",
+      "status": "consumed",
+      "consumed_at": "2026-08-11T09:40:42+00:00"
+    },
+    {
+      "id": "258dea7843dd",
+      "at": "2026-08-11T09:31:01+00:00",
+      "summary": "Create Schedule.json for storing course schedule",
+      "source_path": "Hayden/Plans/Schedule.json",
+      "status": "consumed",
+      "consumed_at": "2026-08-11T09:40:42+00:00"
+    },
+    {
+      "id": "413c2539c2bd",
+      "at": "2026-08-11T09:31:03+00:00",
+      "summary": "ME365 Controls, ME444 Toy Design Lab, ME444 Lecture, MA265 Lin Alg, ME365 Lab schedule",
+      "source_path": "Hayden/Plans/Schedule.json",
+      "status": "consumed",
+      "consumed_at": "2026-08-11T09:40:42+00:00"
+    },
+    {
+      "id": "495b7947f7c0",
+      "at": "2026-08-11T09:40:24+00:00",
+      "summary": "Starting Read refresh for Hayden/Read.json",
+      "source_path": "Hayden",
+      "status": "consumed",
+      "consumed_at": "2026-08-11T09:40:42+00:00"
+    }
+  ]
 }

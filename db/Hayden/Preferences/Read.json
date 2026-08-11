@@ -10,11 +10,30 @@
     "Aesthetic.json",
     "Lifestyle.json"
   ],
-  "recent_changes": [],
+  "recent_changes": [
+    "Coffee/place prefs filed into Food.json + Lifestyle.json"
+  ],
   "active_items": [],
   "known_facts": [],
   "uncertainties": [],
   "last_updated": "",
   "needs_update": false,
-  "read_changelog": []
+  "read_changelog": [
+    {
+      "id": "6a14db0eb707",
+      "at": "2026-08-08T23:07:42+00:00",
+      "summary": "File coffee taste prefs from misfiled research",
+      "source_path": "Hayden/Preferences/Food.json",
+      "status": "consumed",
+      "consumed_at": "2026-08-08T23:15:19+00:00"
+    },
+    {
+      "id": "4c3a9b174542",
+      "at": "2026-08-08T23:07:42+00:00",
+      "summary": "File campus outlet-table place pref",
+      "source_path": "Hayden/Preferences/Lifestyle.json",
+      "status": "consumed",
+      "consumed_at": "2026-08-08T23:15:19+00:00"
+    }
+  ]
 }

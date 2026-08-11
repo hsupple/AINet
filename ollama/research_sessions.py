@@ -123,6 +123,44 @@ def get_session(db: DatabaseTools, session_id: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+_LIFESTYLE_RESEARCH_BLOCK = re.compile(
+    r"\b("
+    r"coffee\s*shop|caf[eé]|barista|cinnamon\s*roll|outlet\s*table|"
+    r"favorite\s*restaurant|best\s*drip|neighborhood\s*coffee|"
+    r"campus\s*amenities|food\s*/\s*local|lifestyle\s*/\s*food"
+    r")\b",
+    re.I,
+)
+
+
+def _looks_like_lifestyle_not_research(
+    *,
+    subject: str,
+    title: str,
+    topic_slug: str,
+    topic_path: str,
+    details_covered: list[Any] | None,
+    notes: str,
+) -> str | None:
+    """Reject prefs/places masquerading as research rabbit holes."""
+    blobs: list[str] = [subject, title, topic_slug, topic_path, notes]
+    for item in details_covered or []:
+        if isinstance(item, dict):
+            blobs.append(str(item.get("text") or ""))
+            tags = item.get("tags")
+            if isinstance(tags, list):
+                blobs.extend(str(t) for t in tags)
+        else:
+            blobs.append(str(item))
+    hay = " ".join(b for b in blobs if b)
+    if _LIFESTYLE_RESEARCH_BLOCK.search(hay):
+        return (
+            "Rejected: this looks like lifestyle/food/place preference, not research. "
+            "File under Hayden/Preferences (Food.json / Lifestyle.json) or Inbox instead."
+        )
+    return None
+
+
 def upsert_research_session(
     db: DatabaseTools,
     *,
@@ -146,6 +184,16 @@ def upsert_research_session(
     ensure_research_scaffold(db)
     subject = (subject or title or topic_slug or "Research session").strip()
     title = (title or subject).strip()
+    blocked = _looks_like_lifestyle_not_research(
+        subject=subject,
+        title=title,
+        topic_slug=topic_slug or "",
+        topic_path=topic_path or "",
+        details_covered=details_covered,
+        notes=notes or "",
+    )
+    if blocked:
+        return {"ok": False, "error": blocked, "hint": "use Preferences/Food or Lifestyle"}
     if not session_id:
         session_id = make_session_id(topic_slug or subject)
     path = session_path(session_id)
@@ -200,6 +248,24 @@ def upsert_research_session(
             data["notes"] = notes
         if status:
             data["status"] = status
+
+    if not details_covered and changelog_entry_ids:
+        from ainet.tools import changelog as changelog_mod
+
+        hydrated: list[dict[str, str]] = []
+        for eid in changelog_entry_ids:
+            entry = changelog_mod.get_entry(db.paths, str(eid))
+            if not entry:
+                continue
+            details = entry.get("details") if isinstance(entry.get("details"), dict) else {}
+            user = str(details.get("user_text") or entry.get("summary") or "").strip()
+            assistant = str(details.get("assistant_text") or "").strip()
+            if user:
+                hydrated.append({"kind": "qa", "text": f"Q: {user}"})
+            if assistant:
+                clip = assistant if len(assistant) <= 900 else assistant[:900] + "…"
+                hydrated.append({"kind": "mechanism", "text": clip})
+        details_covered = hydrated or None
 
     if details_covered:
         normalized = [_normalize_detail(d) for d in details_covered]

@@ -1,0 +1,31 @@
+{
+  "id": "Survival-impact-of-the-mentioned-concept-20260811T090138Z-77d91a",
+  "subject": "Survival impact of the mentioned concept",
+  "title": "Survival impact of the mentioned concept",
+  "topic_slug": "Survival-impact-of-the-mentioned-concept",
+  "topic_path": "Hayden/Research/Topics/Survival-impact-of-the-mentioned-concept",
+  "started_at": "2026-08-11T09:01:38+00:00",
+  "ended_at": "",
+  "status": "open",
+  "duration_seconds": null,
+  "length_turns": 1,
+  "details_covered": [
+    {
+      "kind": "qa",
+      "text": "Q: Awesome, how does this affect survival?"
+    },
+    {
+      "kind": "mechanism",
+      "text": "The brain's **high dependence on blood flow** has **profound implications for survival**, as even **minor disruptions** can lead to **life-threatening consequences**. Here's how this affects survival:\n\n---\n\n### **1. Immediate Consequences of Blood Loss or Blockage**\n- **Stroke**: A blockage (ischemic stroke) or rupture (hemorrhagic stroke) in the brain's blood vessels can **cut off blood flow**, leading to **brain cell death** within minutes. This can result in **paralysis, speech loss, or even death**.\n- **Traumatic Brain Injury (TBI)**: Severe head trauma can **disrupt blood flow**, causing **brain swelling, bleeding, or oxygen deprivation**, which can be **fatal** or lead to **long-term disability**.\n- **Hypotension (Low Blood Pressure)**: If blood pressure drops too low, the brain may not receive enough **oxygen or nutrients**, leading to **loss of consciousness, coma, or death**.\n\n-…"
+    }
+  ],
+  "related_topic": "Survival-impact-of-the-mentioned-concept",
+  "last_quiz_at": "",
+  "memory_score": 0.5,
+  "score_history": [],
+  "source_session_ids": [],
+  "changelog_entry_ids": [
+    "e21889dacd5c4140"
+  ],
+  "notes": ""
+}

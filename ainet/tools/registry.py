@@ -193,14 +193,23 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "create_cop",
             "description": (
-                "Create a course or project context-of-purpose folder from Folderrules templates. "
-                "kind must be 'course' or 'project'."
+                "Create a course or project COP from Folderrules templates "
+                "(Profile/Read/Plan/History). "
+                "path = COP root (School/Courses/<Code> or Work/Projects/<Name>). "
+                "kind = course | project."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "kind": {"type": "string", "enum": ["course", "project"]},
+                    "path": {
+                        "type": "string",
+                        "description": "COP root path, e.g. School/Courses/ME365",
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["course", "project"],
+                        "description": "course → School/Courses; project → Work/Projects",
+                    },
                     "summary": {"type": "string"},
                 },
                 "required": ["path", "kind"],
@@ -524,11 +533,56 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "file_by_id",
+            "description": (
+                "SOI preferred filing tool. Pass Changelog entry_id(s) or Inbox inbox_id only — "
+                "the host copies stored user_text/assistant_text. Do NOT paste turn bodies. "
+                "dest: 'research' | 'identity' | 'voice' | 'psychology' | 'habits' | "
+                "'discard' | a leaf path like Hayden/Preferences/Food.json. File by content, not mode."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {
+                        "type": "string",
+                        "description": "One Changelog.json entry id (e.g. ad7b021d33e644d6)",
+                    },
+                    "entry_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Several related Changelog ids (one research rabbit hole)",
+                    },
+                    "inbox_id": {
+                        "type": "string",
+                        "description": "Hayden/Inbox/Captures.json capture id",
+                    },
+                    "dest": {
+                        "type": "string",
+                        "description": (
+                            "'research' | 'identity' | 'voice' | 'psychology' | 'habits' | "
+                            "'discard' | or a db-relative JSON path"
+                        ),
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "Research subject when dest=research (optional)",
+                    },
+                    "topic_slug": {"type": "string"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["dest"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "upsert_research_session",
             "description": (
-                "SOI: create/update a Hayden/Research/Sessions/<Id>.json entity with "
-                "subject, topic, details_covered, length, etc. Index under Research/Index.json. "
-                "Prefer when filing research/topic-bound oac_turn changelog entries."
+                "SOI: create/update a Hayden/Research/Sessions/<Id>.json entity. "
+                "Prefer file_by_id(dest='research', entry_ids=[...]). If you use this, "
+                "pass changelog_entry_ids only — host fills details_covered from Changelog. "
+                "Do not paste full turn text."
             ),
             "parameters": {
                 "type": "object",
@@ -645,6 +699,7 @@ def tools_subset(names: tuple[str, ...] | list[str] | None = None) -> list[dict[
 
 
 def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
+    from ollama import file_by_id as file_by_id_mod
     from ollama import quiz as quiz_mod
     from ollama import research_sessions as sessions_mod
 
@@ -673,7 +728,9 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
         ),
         "create_folder": lambda **kw: db.create_folder(kw["path"], summary=kw.get("summary")),
         "create_cop": lambda **kw: db.create_cop(
-            kw["path"], kw["kind"], summary=kw.get("summary")
+            str(kw.get("path") or kw.get("folder_path") or ""),
+            str(kw.get("kind") or kw.get("cop_type") or ""),
+            summary=kw.get("summary"),
         ),
         "move_path": lambda **kw: db.move_path(
             kw["src"], kw["dest"], summary=kw.get("summary")
@@ -730,6 +787,16 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
         "get_quiz_status": lambda **kw: quiz_mod.get_quiz_status(
             db,
             reveal_answer=bool(kw.get("reveal_answer", False)),
+        ),
+        "file_by_id": lambda **kw: file_by_id_mod.file_by_id(
+            db,
+            entry_id=str(kw.get("entry_id") or ""),
+            entry_ids=kw.get("entry_ids"),
+            inbox_id=str(kw.get("inbox_id") or ""),
+            dest=str(kw.get("dest") or ""),
+            subject=str(kw.get("subject") or ""),
+            topic_slug=str(kw.get("topic_slug") or ""),
+            summary=kw.get("summary"),
         ),
         "upsert_research_session": lambda **kw: sessions_mod.upsert_research_session(
             db,

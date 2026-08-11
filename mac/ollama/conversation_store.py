@@ -27,6 +27,8 @@ class ConversationStore:
     def __init__(self, db_root: Path | str) -> None:
         self.paths = DbPaths(db_root)
         changelog.ensure_changelog_file(self.paths.root)
+        changelog.ensure_masterlog_file(self.paths.root)
+        changelog.migrate_resolved_to_masterlog(self.paths)
         self.root = self.paths.root / "runtime" / "oac"
         self.sessions_dir = self.root / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)

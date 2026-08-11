@@ -28,7 +28,7 @@ class Action(str, Enum):
 
 PROTECTED_READ_ONLY = {"rules.txt"}
 CODE_ONLY_WRITE = {"calendar.json"}
-APPEND_ONLY = {"changelog.json"}
+APPEND_ONLY = {"changelog.json", "masterlog.json"}
 
 
 @dataclass
@@ -137,10 +137,10 @@ class Permissions:
                 return
             if action == Action.WRITE:
                 raise PermissionError_(
-                    "Changelog.json is append-only; use the changelog tool."
+                    f"{rel} is append-only; host archives via changelog/masterlog helpers."
                 )
             if action in {Action.DELETE, Action.MOVE, Action.CREATE_FILE, Action.CREATE_DIR}:
-                raise PermissionError_("Changelog.json cannot be restructured by the AI.")
+                raise PermissionError_(f"{rel} cannot be restructured by the AI.")
             return
 
         if key == "folderrules.json":

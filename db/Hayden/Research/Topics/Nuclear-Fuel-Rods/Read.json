@@ -1,0 +1,42 @@
+{
+  "summary": "Research thread: Nuclear Fuel Rods",
+  "state": "active",
+  "important_context": [
+    "Topic: Nuclear Fuel Rods"
+  ],
+  "recent_changes": [],
+  "active_items": [
+    "Establish what we already covered",
+    "List open questions"
+  ],
+  "known_facts": [],
+  "uncertainties": [],
+  "last_updated": "",
+  "needs_update": false,
+  "read_changelog": [
+    {
+      "id": "0f624fbd78e2",
+      "at": "2026-08-08T23:10:21+00:00",
+      "summary": "Seed research Notes for Nuclear Fuel Rods",
+      "source_path": "Hayden/Research/Topics/Nuclear-Fuel-Rods/Notes.json",
+      "status": "consumed",
+      "consumed_at": "2026-08-08T23:15:19+00:00"
+    },
+    {
+      "id": "203085312aa8",
+      "at": "2026-08-08T23:10:21+00:00",
+      "summary": "Seed research History for Nuclear Fuel Rods",
+      "source_path": "Hayden/Research/Topics/Nuclear-Fuel-Rods/History.json",
+      "status": "consumed",
+      "consumed_at": "2026-08-08T23:15:19+00:00"
+    },
+    {
+      "id": "eb8b33b3a227",
+      "at": "2026-08-08T23:10:21+00:00",
+      "summary": "Host-seed topic notes for Nuclear Fuel Rods",
+      "source_path": "Hayden/Research/Topics/Nuclear-Fuel-Rods/Notes.json",
+      "status": "consumed",
+      "consumed_at": "2026-08-08T23:15:19+00:00"
+    }
+  ]
+}

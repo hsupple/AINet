@@ -1,0 +1,31 @@
+{
+  "id": "Brain-Blood-Requirements-20260811T090131Z-e116c5",
+  "subject": "Brain Blood Requirements",
+  "title": "Brain Blood Requirements",
+  "topic_slug": "Brain-Blood-Requirements",
+  "topic_path": "Hayden/Research/Topics/Brain-Blood-Requirements",
+  "started_at": "2026-08-11T09:01:31+00:00",
+  "ended_at": "",
+  "status": "open",
+  "duration_seconds": null,
+  "length_turns": 1,
+  "details_covered": [
+    {
+      "kind": "qa",
+      "text": "Q: Why does the brain need so much blood?"
+    },
+    {
+      "kind": "mechanism",
+      "text": "The brain needs a **large and constant supply of blood** because of its **high metabolic demand** and **critical role in bodily functions**. Here's why:\n\n---\n\n### **1. High Metabolic Activity**\n- The **brain uses about 20% of the body's total oxygen** and **25% of its glucose** despite making up only **2% of body weight**.\n- Neurons (brain cells) are **highly active** and **require a lot of energy** to maintain communication, process information, and control body functions.\n\n---\n\n### **2. Lack of Energy Storage**\n- Unlike other tissues, the **brain cannot store glucose or oxygen**. It must receive a **constant supply** from the blood to function properly.\n- If the blood supply is interrupted (e.g., during a stroke or trauma), the brain can **deteriorate within minutes**.\n\n---\n\n### **3. High Oxygen Demand**\n- The **brain is highly sensitive to oxygen deprivation** (hypoxia).\n- Even a **sh…"
+    }
+  ],
+  "related_topic": "Brain-Blood-Requirements",
+  "last_quiz_at": "",
+  "memory_score": 0.5,
+  "score_history": [],
+  "source_session_ids": [],
+  "changelog_entry_ids": [
+    "510f1ff1d8d44463"
+  ],
+  "notes": ""
+}

@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from ollama.config import OllamaConfig
+
+TokenCallback = Callable[[str], None]
+ThinkingCallback = Callable[[str], None]
 
 
 class OllamaError(RuntimeError):
@@ -24,11 +29,62 @@ class OllamaClient:
         *,
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
+        think: bool | None = None,
+        timeout_s: float | None = None,
     ) -> dict[str, Any]:
+        """Non-streaming chat (callers that want a single blob)."""
+        return self._chat_request(
+            messages,
+            tools=tools,
+            model=model,
+            think=think,
+            stream=False,
+            timeout_s=timeout_s,
+        )
+
+    def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        think: bool | None = None,
+        on_token: TokenCallback | None = None,
+        on_thinking: ThinkingCallback | None = None,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        """Stream assistant tokens (+ optional thinking); return final chat shape."""
+        return self._chat_request(
+            messages,
+            tools=tools,
+            model=model,
+            think=think,
+            stream=True,
+            on_token=on_token,
+            on_thinking=on_thinking,
+            timeout_s=timeout_s,
+        )
+
+    def _chat_request(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        think: bool | None = None,
+        stream: bool = False,
+        on_token: TokenCallback | None = None,
+        on_thinking: ThinkingCallback | None = None,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        use_think = bool(self.config.oac_think if think is None else think)
+        wait = float(self.config.timeout_s if timeout_s is None else timeout_s)
         payload: dict[str, Any] = {
             "model": model or self.config.model,
             "messages": messages,
-            "stream": False,
+            "stream": stream,
+            # Qwen3: false → /no_think, true → /think
+            "think": use_think,
         }
         if tools:
             payload["tools"] = tools
@@ -42,20 +98,112 @@ class OllamaClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.config.timeout_s) as resp:
-                body = resp.read().decode("utf-8")
+            with urllib.request.urlopen(req, timeout=wait) as resp:
+                if not stream:
+                    body = resp.read().decode("utf-8")
+                    try:
+                        return json.loads(body)
+                    except json.JSONDecodeError as exc:
+                        raise OllamaError(f"Ollama returned non-JSON: {body[:200]}") from exc
+                return self._consume_stream(
+                    resp,
+                    on_token=on_token,
+                    on_thinking=on_thinking,
+                )
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise OllamaError(f"Ollama HTTP {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            if self._is_timeout(reason):
+                raise OllamaError(
+                    f"Ollama timed out after {wait:.0f}s (host={self.config.host})"
+                ) from exc
             raise OllamaError(
-                f"Cannot reach Ollama at {self.config.host}. Is it running? ({exc.reason})"
+                f"Cannot reach Ollama at {self.config.host}. Is it running? ({reason})"
+            ) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise OllamaError(
+                f"Ollama timed out after {wait:.0f}s (host={self.config.host})"
             ) from exc
 
-        try:
-            return json.loads(body)
-        except json.JSONDecodeError as exc:
-            raise OllamaError(f"Ollama returned non-JSON: {body[:200]}") from exc
+    @staticmethod
+    def _is_timeout(reason: Any) -> bool:
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return True
+        return "timed out" in str(reason).lower()
+
+    def _consume_stream(
+        self,
+        resp: Any,
+        *,
+        on_token: TokenCallback | None = None,
+        on_thinking: ThinkingCallback | None = None,
+    ) -> dict[str, Any]:
+        """Read NDJSON chat stream; accumulate final message (incl. tool_calls)."""
+        role = "assistant"
+        content_parts: list[str] = []
+        thinking_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+        meta: dict[str, Any] = {}
+
+        for raw in resp:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                chunk = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise OllamaError(f"Ollama stream non-JSON: {line[:200]}") from exc
+
+            if chunk.get("error"):
+                raise OllamaError(str(chunk["error"]))
+
+            msg = chunk.get("message") or {}
+            if msg.get("role"):
+                role = msg["role"]
+
+            delta = msg.get("content") or ""
+            if delta:
+                content_parts.append(delta)
+                if on_token:
+                    on_token(delta)
+
+            think_delta = msg.get("thinking") or ""
+            if think_delta:
+                thinking_parts.append(think_delta)
+                if on_thinking:
+                    on_thinking(think_delta)
+
+            incoming_tools = msg.get("tool_calls")
+            if incoming_tools:
+                tool_calls = list(incoming_tools)
+
+            if chunk.get("done"):
+                for key in (
+                    "model",
+                    "created_at",
+                    "done_reason",
+                    "total_duration",
+                    "load_duration",
+                    "prompt_eval_count",
+                    "prompt_eval_duration",
+                    "eval_count",
+                    "eval_duration",
+                ):
+                    if key in chunk:
+                        meta[key] = chunk[key]
+
+        message: dict[str, Any] = {
+            "role": role,
+            "content": "".join(content_parts),
+        }
+        if thinking_parts:
+            message["thinking"] = "".join(thinking_parts)
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+
+        return {"message": message, "done": True, **meta}
 
     def list_models(self) -> list[str]:
         url = f"{self.config.host}/api/tags"

@@ -13,7 +13,8 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
 2. Protected files
    - Rules.txt: AI may read. AI must never write, rename, move, or delete.
    - Calendar.json: AI may read. Writes are code-only (scheduler/system), never AI tools.
-   - Changelog.json: AI must not rewrite. Changes are recorded only via append_changelog / automatic tool logging.
+   - Changelog.json: live queue. AI must not rewrite. OAC appends pending oac_turns; tool writes may append. After SOI files/discards a turn, the host copies it to Masterlog.json and removes it from Changelog.
+   - Masterlog.json: append-only permanent archive of filed/discarded oac_turns (full user_text/assistant_text + filed_to). Never delete or rewrite. AI may read.
 
 3. Efficiency / COP load order
    - For a COP, load in this order: Read.json → Plan.json → History.json only if needed → Profile.json almost never in live talk.
@@ -40,7 +41,7 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
    - AI1 OAC (Orchestrator of Conversation): live interface. READ tools + allowlisted quiz helpers
      (should_suggest_quiz, list_quiz_candidates, start_quiz, record_quiz_answer, get_quiz_status).
      Short-term chat lives in db/runtime/oac/ (including quiz_active.json). OAC cannot use general DB writes.
-   - Every OAC user turn is stacked onto Changelog.json as action=oac_turn with full user_text (and assistant_text) and soi_status=pending. That content stays pending until SOI files it into proper leaves or marks it discarded.
+   - Every OAC user turn is stacked onto Changelog.json as action=oac_turn with full user_text (and assistant_text) and soi_status=pending. After SOI files or discards it, the host appends that entry to Masterlog.json (kept forever) and drops it from the Changelog queue. Nothing is deleted from Masterlog.
    - AI2 SOI (Slave of Information) has two phases:
        Phase 1 filing — after OAC idle soi_idle_seconds (default 45s): process pending oac_turn + unfiled Inbox; mutate DB; mark changelog entries filed/discarded.
          Research / topic-bound turns → upsert_research_session (and complete_research_session when done)

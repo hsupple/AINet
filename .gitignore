@@ -13,10 +13,13 @@ Thumbs.db
 Desktop.ini
 *.tmp
 .ainet-*.tmp
+.ainet-soi-harness*/
+.ainet-soi-harness*.log
 .changelog-*.tmp
 
 # Runtime / machine-local control files (grow or are code-owned)
 db/Changelog.json
+db/Masterlog.json
 db/Calendar.json
 db/runtime/
 !db/runtime/.gitkeep

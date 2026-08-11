@@ -36,6 +36,8 @@ class SOIWorker:
         self.client = client or OllamaClient(self.config)
         self.db = DatabaseTools(self.config.db_root)
         changelog.ensure_changelog_file(Path(self.config.db_root))
+        changelog.ensure_masterlog_file(Path(self.config.db_root))
+        changelog.migrate_resolved_to_masterlog(self.db.paths)
         self.state_dir = Path(self.config.db_root) / "runtime" / "soi"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.state_dir / "state.json"

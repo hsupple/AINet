@@ -17,10 +17,16 @@ class RouteDecision:
 
 _RESEARCH = re.compile(
     r"\b("
-    r"how does|how do|mechanism|explain (in )?(depth|detail)|deep dive|rabbit hole|"
+    r"how does|how do|what does|what is|what'?s|what are|why does|why do|"
+    r"is this|does the|mechanism|explain (in )?(depth|detail)|deep dive|rabbit hole|"
     r"derive|proof|theorem|quantum|black hole|synthase|mitochondr|neuron|enzyme|"
     r"history of|discovered|evidence for|why does|walk me through the|"
-    r"under the hood|fundamentals of"
+    r"under the hood|fundamentals of|"
+    # learning / anatomy / science Q&A (spoken companion often uses these)
+    r"learn(ing)? about|teach me|other than the|what other|what'?s the difference|"
+    r"muscle|muscles|anatomy|physiology|forearm|neuron|cell|protein|chemistry|"
+    r"physics|biology|math|calculus|flexor|extensor|brachioradialis|"
+    r"quiz me|test my knowledge"
     r")\b",
     re.I,
 )
@@ -73,9 +79,9 @@ def suggest_mode(user_text: str, current_mode_id: str) -> RouteDecision:
     if _PLANNER.search(text):
         return RouteDecision("planner", 0.8, "planning language")
 
-    if _RESEARCH.search(text) or (len(text) > 180 and "?" in text):
-        conf = 0.82 if _RESEARCH.search(text) else 0.55
-        return RouteDecision("research", conf, "deep-explain / long question")
+    if _RESEARCH.search(text) or ("?" in text and len(text) > 18):
+        conf = 0.85 if _RESEARCH.search(text) else 0.72
+        return RouteDecision("research", conf, "deep-explain / learning question")
 
     if _CONVERSATION.search(text):
         return RouteDecision("conversation", 0.75, "personal dialogue cues")

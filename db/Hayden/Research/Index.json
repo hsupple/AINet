@@ -4,8 +4,125 @@
       "slug": "ATP-Synthase",
       "title": "ATP Synthase",
       "path": "Hayden/Research/Topics/ATP-Synthase"
+    },
+    {
+      "slug": "Nuclear-Fuel-Rods",
+      "title": "Nuclear Fuel Rods",
+      "path": "Hayden/Research/Topics/Nuclear-Fuel-Rods"
+    },
+    {
+      "slug": "Research-Thread",
+      "title": "Research Thread",
+      "path": "Hayden/Research/Topics/Research-Thread"
+    },
+    {
+      "slug": "Brain-Blood-Requirements",
+      "title": "Brain Blood Requirements",
+      "path": "Hayden/Research/Topics/Brain-Blood-Requirements"
+    },
+    {
+      "slug": "Survival-impact-of-the-mentioned-concept",
+      "title": "Survival impact of the mentioned concept",
+      "path": "Hayden/Research/Topics/Survival-impact-of-the-mentioned-concept"
     }
   ],
-  "sessions": [],
-  "last_updated": ""
+  "sessions": [
+    {
+      "id": "Nuclear-Fuel-Rods-20260808T231021Z-436a58",
+      "subject": "Nuclear Fuel Rods",
+      "path": "Hayden/Research/Sessions/Nuclear-Fuel-Rods-20260808T231021Z-436a58.json",
+      "topic_slug": "Nuclear-Fuel-Rods",
+      "started_at": "2026-08-08T23:10:21+00:00",
+      "ended_at": "",
+      "status": "open",
+      "memory_score": 0.5,
+      "length_turns": 1,
+      "duration_seconds": null
+    },
+    {
+      "id": "Research-Thread-20260808T231021Z-ba6cd8",
+      "subject": "Research Thread",
+      "path": "Hayden/Research/Sessions/Research-Thread-20260808T231021Z-ba6cd8.json",
+      "topic_slug": "Research-Thread",
+      "started_at": "2026-08-08T23:10:21+00:00",
+      "ended_at": "",
+      "status": "open",
+      "memory_score": 0.5,
+      "length_turns": 1,
+      "duration_seconds": null
+    },
+    {
+      "id": "Brain-Blood-Requirements-20260811T090131Z-e116c5",
+      "subject": "Brain Blood Requirements",
+      "path": "Hayden/Research/Sessions/Brain-Blood-Requirements-20260811T090131Z-e116c5.json",
+      "topic_slug": "Brain-Blood-Requirements",
+      "started_at": "2026-08-11T09:01:31+00:00",
+      "ended_at": "",
+      "status": "open",
+      "memory_score": 0.5,
+      "length_turns": 1,
+      "duration_seconds": null
+    },
+    {
+      "id": "Survival-impact-of-the-mentioned-concept-20260811T090138Z-77d91a",
+      "subject": "Survival impact of the mentioned concept",
+      "path": "Hayden/Research/Sessions/Survival-impact-of-the-mentioned-concept-20260811T090138Z-77d91a.json",
+      "topic_slug": "Survival-impact-of-the-mentioned-concept",
+      "started_at": "2026-08-11T09:01:38+00:00",
+      "ended_at": "",
+      "status": "open",
+      "memory_score": 0.5,
+      "length_turns": 1,
+      "duration_seconds": null
+    },
+    {
+      "id": "Survival-impact-of-the-mentioned-concept-20260811T092312Z-74c27c",
+      "subject": "Survival impact of the mentioned concept",
+      "path": "Hayden/Research/Sessions/Survival-impact-of-the-mentioned-concept-20260811T092312Z-74c27c.json",
+      "topic_slug": "Survival-impact-of-the-mentioned-concept",
+      "started_at": "2026-08-11T09:23:12+00:00",
+      "ended_at": "",
+      "status": "open",
+      "memory_score": 0.5,
+      "length_turns": 1,
+      "duration_seconds": null
+    },
+    {
+      "id": "Survival-impact-of-the-mentioned-concept-20260811T092312Z-1347ec",
+      "subject": "Survival impact of the mentioned concept",
+      "path": "Hayden/Research/Sessions/Survival-impact-of-the-mentioned-concept-20260811T092312Z-1347ec.json",
+      "topic_slug": "Survival-impact-of-the-mentioned-concept",
+      "started_at": "2026-08-11T09:23:12+00:00",
+      "ended_at": "",
+      "status": "open",
+      "memory_score": 0.5,
+      "length_turns": 1,
+      "duration_seconds": null
+    },
+    {
+      "id": "Survival-impact-of-the-mentioned-concept-20260811T092312Z-70e678",
+      "subject": "Survival impact of the mentioned concept",
+      "path": "Hayden/Research/Sessions/Survival-impact-of-the-mentioned-concept-20260811T092312Z-70e678.json",
+      "topic_slug": "Survival-impact-of-the-mentioned-concept",
+      "started_at": "2026-08-11T09:23:12+00:00",
+      "ended_at": "",
+      "status": "open",
+      "memory_score": 0.5,
+      "length_turns": 1,
+      "duration_seconds": null
+    },
+    {
+      "id": "Survival-impact-of-the-mentioned-concept-20260811T092312Z-637b3e",
+      "subject": "Survival impact of the mentioned concept",
+      "path": "Hayden/Research/Sessions/Survival-impact-of-the-mentioned-concept-20260811T092312Z-637b3e.json",
+      "topic_slug": "Survival-impact-of-the-mentioned-concept",
+      "started_at": "2026-08-11T09:23:12+00:00",
+      "ended_at": "",
+      "status": "open",
+      "memory_score": 0.5,
+      "length_turns": 1,
+      "duration_seconds": null
+    }
+  ],
+  "last_updated": "2026-08-11T09:43:53+00:00"
 }

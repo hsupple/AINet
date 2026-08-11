@@ -5,7 +5,8 @@
   "protected_paths": [
     "Rules.txt",
     "Calendar.json",
-    "Changelog.json"
+    "Changelog.json",
+    "Masterlog.json"
   ],
   "immutable_roots": ["Hayden", "School", "Work", "Household"],
   "naming": {

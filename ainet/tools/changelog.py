@@ -60,9 +60,81 @@ def append_entry(
     elif actor == "oac" or action == "oac_turn":
         entry["soi_status"] = "pending"
 
-    data["entries"].append(entry)
-    _save(paths, data)
+    # Changelog.json is the pending OAC→SOI queue only.
+    # Tool activity is permanent history on Masterlog.json.
+    if actor == "oac" or action == "oac_turn":
+        data["entries"].append(entry)
+        _save(paths, data)
+        return entry
+    append_masterlog_entries(paths, [entry])
     return entry
+
+
+def _load_masterlog(paths: DbPaths) -> dict[str, Any]:
+    ensure_masterlog_file(paths.root)
+    master_path = paths.resolve("Masterlog.json", must_exist=True)
+    with master_path.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict) or "entries" not in data:
+        raise ValueError("Masterlog.json must be an object with an 'entries' array.")
+    if not isinstance(data["entries"], list):
+        raise ValueError("Masterlog.json 'entries' must be a list.")
+    return data
+
+
+def _save_masterlog(paths: DbPaths, data: dict[str, Any]) -> None:
+    master_path = paths.resolve("Masterlog.json", must_exist=True)
+    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    atomic_write_text(master_path, text)
+
+
+def append_masterlog_entries(paths: DbPaths, entries: list[dict[str, Any]]) -> int:
+    """Append unique entries to Masterlog.json. Never deletes. Returns count added."""
+    if not entries:
+        return 0
+    data = _load_masterlog(paths)
+    existing = {
+        str(e.get("id") or "")
+        for e in data["entries"]
+        if isinstance(e, dict) and e.get("id")
+    }
+    added = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        eid = str(entry.get("id") or "")
+        if not eid:
+            continue
+        if eid in existing:
+            for i, row in enumerate(data["entries"]):
+                if isinstance(row, dict) and str(row.get("id") or "") == eid:
+                    data["entries"][i] = entry
+                    added += 1
+                    break
+            continue
+        data["entries"].append(entry)
+        existing.add(eid)
+        added += 1
+    if added:
+        data["last_updated"] = _utc_now()
+        _save_masterlog(paths, data)
+    return added
+
+
+def get_entry(paths: DbPaths, entry_id: str) -> dict[str, Any] | None:
+    """Return a Changelog or Masterlog entry by id, or None."""
+    wanted = str(entry_id or "").strip()
+    if not wanted:
+        return None
+    data = _load(paths)
+    for i, entry in enumerate(data["entries"]):
+        if isinstance(entry, dict) and str(entry.get("id") or "") == wanted:
+            return {"index": i, **entry}
+    master = _load_masterlog(paths)
+    for entry in master["entries"]:
+        if isinstance(entry, dict) and str(entry.get("id") or "") == wanted:
+            return {"index": -1, "archived": True, **entry}
+    return None
 
 
 def pending_oac_entries(paths: DbPaths) -> list[dict[str, Any]]:
@@ -86,26 +158,83 @@ def mark_soi_status(
     *,
     entry_ids: list[str],
     status: str,
+    dest_by_id: dict[str, str] | None = None,
 ) -> int:
-    """Mark changelog entries filed|discarded. Returns count updated."""
+    """Mark entries filed|discarded, copy them to Masterlog, remove from Changelog queue.
+
+    Masterlog is append-only and never deleted. Changelog is the pending oac_turn queue.
+    """
     if status not in {"pending", "filed", "discarded"}:
         raise ValueError(f"Invalid soi_status: {status}")
-    wanted = set(entry_ids)
+    wanted = {str(x) for x in entry_ids if x}
     if not wanted:
         return 0
+    dest_by_id = dest_by_id or {}
     data = _load(paths)
+    now = _utc_now()
+
+    if status == "pending":
+        updated = 0
+        for entry in data["entries"]:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("id") or "") in wanted:
+                entry["soi_status"] = "pending"
+                entry.pop("soi_processed_at", None)
+                updated += 1
+        if updated:
+            _save(paths, data)
+        return updated
+
+    keep: list[Any] = []
+    archived: list[dict[str, Any]] = []
     updated = 0
     for entry in data["entries"]:
         if not isinstance(entry, dict):
+            keep.append(entry)
             continue
-        eid = entry.get("id")
-        if eid in wanted:
-            entry["soi_status"] = status
-            entry["soi_processed_at"] = _utc_now()
-            updated += 1
+        eid = str(entry.get("id") or "")
+        if eid not in wanted:
+            keep.append(entry)
+            continue
+        row = dict(entry)
+        row["soi_status"] = status
+        row["soi_processed_at"] = now
+        row["archived_at"] = now
+        if eid in dest_by_id:
+            row["filed_to"] = dest_by_id[eid]
+        archived.append(row)
+        updated += 1
     if updated:
+        append_masterlog_entries(paths, archived)
+        data["entries"] = keep
         _save(paths, data)
     return updated
+
+
+def migrate_resolved_to_masterlog(paths: DbPaths) -> int:
+    """Move already filed/discarded oac_turns from Changelog into Masterlog."""
+    data = _load(paths)
+    keep: list[Any] = []
+    moved: list[dict[str, Any]] = []
+    for entry in data["entries"]:
+        if not isinstance(entry, dict):
+            keep.append(entry)
+            continue
+        is_turn = entry.get("action") == "oac_turn" or entry.get("actor") == "oac"
+        status = entry.get("soi_status")
+        if is_turn and status not in {"filed", "discarded"}:
+            keep.append(entry)
+            continue
+        row = dict(entry)
+        row.setdefault("archived_at", row.get("soi_processed_at") or _utc_now())
+        moved.append(row)
+    if not moved:
+        return 0
+    append_masterlog_entries(paths, moved)
+    data["entries"] = keep
+    _save(paths, data)
+    return len(moved)
 
 
 def ensure_changelog_file(root: Path) -> None:
@@ -113,3 +242,12 @@ def ensure_changelog_file(root: Path) -> None:
     if path.exists():
         return
     atomic_write_text(path, json.dumps({"version": 1, "entries": []}, indent=2) + "\n")
+
+
+def ensure_masterlog_file(root: Path) -> None:
+    path = Path(root) / "Masterlog.json"
+    if not path.exists():
+        atomic_write_text(
+            path,
+            json.dumps({"version": 1, "entries": [], "last_updated": ""}, indent=2) + "\n",
+        )

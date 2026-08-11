@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AINet</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #0e1a17;
+      --panel: rgba(18, 36, 32, 0.72);
+      --line: rgba(214, 232, 220, 0.14);
+      --text: #e7f2ea;
+      --muted: #9bb5a8;
+      --accent: #d4a24c;
+      --accent-dim: rgba(212, 162, 76, 0.18);
+      --user: #1f3d34;
+      --bot: rgba(255, 255, 255, 0.04);
+      --danger: #e08a6a;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: "Sora", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 700px at 10% -10%, rgba(212, 162, 76, 0.18), transparent 55%),
+        radial-gradient(900px 600px at 100% 0%, rgba(62, 140, 118, 0.22), transparent 50%),
+        linear-gradient(165deg, #07110e 0%, #122822 45%, #0a1613 100%);
+      background-attachment: fixed;
+    }
+
+    .shell {
+      max-width: 860px;
+      height: 100%;
+      margin: 0 auto;
+      padding: 1.25rem 1rem 1rem;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 0.85rem;
+    }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 1rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 0.75rem;
+    }
+
+    .brand {
+      font-family: "Instrument Serif", serif;
+      font-size: clamp(2.2rem, 6vw, 3.4rem);
+      line-height: 0.95;
+      letter-spacing: -0.02em;
+      margin: 0;
+    }
+
+    .brand span {
+      color: var(--accent);
+      font-style: italic;
+    }
+
+    .meta {
+      text-align: right;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .meta strong { color: var(--text); font-weight: 500; }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin-top: 0.55rem;
+    }
+
+    button, select {
+      font: inherit;
+      font-size: 0.78rem;
+      color: var(--text);
+      background: var(--accent-dim);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0.35rem 0.75rem;
+      cursor: pointer;
+    }
+    button:hover, select:hover { border-color: var(--accent); }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    #soi {
+      background: var(--accent);
+      color: var(--ink);
+      border: none;
+      font-weight: 600;
+    }
+    #soi.running { opacity: 0.7; }
+
+    #log {
+      overflow-y: auto;
+      padding: 0.25rem 0.15rem 0.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.7rem;
+      scroll-behavior: smooth;
+    }
+
+    .bubble {
+      max-width: min(92%, 640px);
+      padding: 0.85rem 1rem;
+      border-radius: 1rem;
+      border: 1px solid var(--line);
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.5;
+      font-size: 0.95rem;
+      animation: rise 220ms ease-out;
+    }
+    .bubble.user {
+      align-self: flex-end;
+      background: var(--user);
+      border-color: rgba(212, 162, 76, 0.28);
+    }
+    .bubble.bot {
+      align-self: flex-start;
+      background: var(--bot);
+      backdrop-filter: blur(8px);
+    }
+    .bubble.sys {
+      align-self: center;
+      max-width: 100%;
+      font-size: 0.75rem;
+      color: var(--muted);
+      background: transparent;
+      border-style: dashed;
+      padding: 0.4rem 0.7rem;
+    }
+    .bubble.error { color: var(--danger); border-color: rgba(224, 138, 106, 0.4); }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: none; }
+    }
+
+    form {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.55rem;
+      align-items: end;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 1.1rem;
+      padding: 0.65rem;
+      backdrop-filter: blur(10px);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 3.2rem;
+      max-height: 9rem;
+      resize: vertical;
+      font: inherit;
+      font-size: 0.95rem;
+      color: var(--text);
+      background: transparent;
+      border: none;
+      outline: none;
+      padding: 0.45rem 0.55rem;
+      line-height: 1.45;
+    }
+
+    form button[type="submit"] {
+      background: var(--accent);
+      color: var(--ink);
+      border: none;
+      font-weight: 600;
+      padding: 0.7rem 1.1rem;
+      border-radius: 0.85rem;
+    }
+
+    .hint {
+      grid-column: 1 / -1;
+      font-size: 0.7rem;
+      color: var(--muted);
+      padding: 0 0.35rem 0.1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <h1 class="brand">AI<span>Net</span></h1>
+        <div class="toolbar">
+          <select id="mode" title="Mode"></select>
+          <button type="button" id="reset">New session</button>
+          <button type="button" id="soi">Start SOI</button>
+        </div>
+      </div>
+      <div class="meta" id="meta">Connecting…</div>
+    </header>
+
+    <div id="log" aria-live="polite"></div>
+
+    <form id="form">
+      <textarea id="input" rows="2" placeholder="Talk to the local model…" autofocus></textarea>
+      <button type="submit" id="send">Send</button>
+      <div class="hint">Turns persist via OAC → SOI idle filing into your db. Enter to send · Shift+Enter for newline</div>
+    </form>
+  </div>
+
+  <script>
+    const logEl = document.getElementById("log");
+    const form = document.getElementById("form");
+    const input = document.getElementById("input");
+    const sendBtn = document.getElementById("send");
+    const meta = document.getElementById("meta");
+    const modeSel = document.getElementById("mode");
+    const soiBtn = document.getElementById("soi");
+    let busy = false;
+    let lastSoi = "";
+    let soiPoll = null;
+
+    function addBubble(text, kind) {
+      const el = document.createElement("div");
+      el.className = "bubble " + kind;
+      el.textContent = text;
+      logEl.appendChild(el);
+      logEl.scrollTop = logEl.scrollHeight;
+      return el;
+    }
+
+    function renderMeta(s) {
+      meta.innerHTML =
+        "<strong>" + (s.model || "?") + "</strong><br>" +
+        "mode " + (s.mode || "?") +
+        (s.topic ? "<br>topic " + s.topic : "") +
+        (s.session_id ? "<br>session " + s.session_id.slice(0, 8) : "") +
+        (s.soi_running ? "<br>SOI running" : "");
+      if (Array.isArray(s.modes) && modeSel.options.length === 0) {
+        for (const m of s.modes) {
+          const opt = document.createElement("option");
+          opt.value = m.id;
+          opt.textContent = m.name || m.id;
+          modeSel.appendChild(opt);
+        }
+      }
+      if (s.mode) modeSel.value = s.mode;
+      if (Object.prototype.hasOwnProperty.call(s, "soi_running")) {
+        setSoiUi(!!s.soi_running);
+      }
+      const tip = (s.soi_log || []).slice(-1)[0];
+      if (tip && tip !== lastSoi) {
+        lastSoi = tip;
+        addBubble(tip, "sys");
+      }
+    }
+
+    function setSoiUi(running) {
+      soiBtn.disabled = running;
+      soiBtn.classList.toggle("running", running);
+      soiBtn.textContent = running ? "SOI running…" : "Start SOI";
+      if (running && !soiPoll) {
+        soiPoll = setInterval(refreshStatus, 1500);
+      } else if (!running && soiPoll) {
+        clearInterval(soiPoll);
+        soiPoll = null;
+      }
+    }
+
+    async function refreshStatus() {
+      try {
+        const r = await fetch("/api/status");
+        const s = await r.json();
+        if (s.ok) renderMeta(s);
+      } catch (e) {
+        meta.textContent = "Server offline";
+      }
+    }
+
+    async function post(path, body) {
+      const r = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      return r.json();
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text || busy) return;
+      busy = true;
+      sendBtn.disabled = true;
+      addBubble(text, "user");
+      input.value = "";
+      const thinking = addBubble("…", "bot sys");
+      try {
+        const data = await post("/api/chat", { message: text });
+        thinking.remove();
+        if (!data.ok) addBubble(data.error || "Error", "bot error");
+        else {
+          addBubble(data.reply || "(empty reply)", "bot");
+          renderMeta(data);
+        }
+      } catch (err) {
+        thinking.remove();
+        addBubble(String(err), "bot error");
+      } finally {
+        busy = false;
+        sendBtn.disabled = false;
+        input.focus();
+        refreshStatus();
+      }
+    });
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    });
+
+    document.getElementById("reset").addEventListener("click", async () => {
+      const data = await post("/api/reset", {});
+      if (data.ok) {
+        addBubble("New OAC session", "sys");
+        renderMeta(data);
+      }
+    });
+
+    soiBtn.addEventListener("click", async () => {
+      soiBtn.disabled = true;
+      addBubble("Starting SOI…", "sys");
+      try {
+        const data = await post("/api/soi", {});
+        if (!data.ok) {
+          addBubble(data.error || data.reason || "SOI failed to start", "sys error");
+          setSoiUi(false);
+          return;
+        }
+        if (data.started === false) {
+          addBubble(data.reason || "SOI already running", "sys");
+        }
+        renderMeta(data);
+        setSoiUi(!!data.soi_running || data.started !== false);
+      } catch (err) {
+        addBubble(String(err), "sys error");
+        setSoiUi(false);
+      }
+    });
+
+    modeSel.addEventListener("change", async () => {
+      const data = await post("/api/mode", { mode: modeSel.value });
+      if (!data.ok) addBubble(data.error || "Mode change failed", "sys error");
+      else {
+        addBubble("Mode → " + data.mode, "sys");
+        renderMeta(data);
+      }
+    });
+
+    refreshStatus();
+    setInterval(refreshStatus, 8000);
+  </script>
+</body>
+</html>

@@ -40,6 +40,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default=None, help="Ollama base URL")
     parser.add_argument("--model", default=None, help="Model name")
     parser.add_argument("--db", type=Path, default=None, help="Database root")
+    parser.add_argument(
+        "--oac-think",
+        dest="oac_think",
+        action="store_true",
+        default=None,
+        help="Enable Qwen3 thinking for OAC (default off)",
+    )
+    parser.add_argument(
+        "--no-oac-think",
+        dest="oac_think",
+        action="store_false",
+        help="Disable Qwen3 thinking for OAC",
+    )
+    parser.add_argument(
+        "--soi-think",
+        dest="soi_think",
+        action="store_true",
+        default=None,
+        help="Enable Qwen3 thinking for SOI (default off)",
+    )
+    parser.add_argument(
+        "--no-soi-think",
+        dest="soi_think",
+        action="store_false",
+        help="Disable Qwen3 thinking for SOI",
+    )
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -72,6 +98,13 @@ def main(argv: list[str] | None = None) -> int:
     route.add_argument("message")
 
     sub.add_parser("ping", help="Check Ollama connectivity")
+
+    web = sub.add_parser("web", help="LAN web chat UI (default 0.0.0.0:1111)")
+    web.add_argument("--bind", default="0.0.0.0", help="Bind address (0.0.0.0 = all interfaces)")
+    web.add_argument("--port", type=int, default=1111, help="TCP port")
+    web.add_argument("--mode", default=DEFAULT_MODE_ID, help="Initial OAC mode")
+    web.add_argument("--no-soi", action="store_true", help="Disable idle SOI watcher")
+
     soi_run = sub.add_parser("soi-run", help="Run SOI now (filing and/or Read refresh)")
     soi_run.add_argument(
         "--phase",
@@ -90,6 +123,10 @@ def main(argv: list[str] | None = None) -> int:
         updates["model"] = args.model
     if args.db:
         updates["db_root"] = args.db
+    if getattr(args, "oac_think", None) is not None:
+        updates["oac_think"] = args.oac_think
+    if getattr(args, "soi_think", None) is not None:
+        updates["soi_think"] = args.soi_think
     if getattr(args, "auto_mode", None) is not None:
         updates["auto_mode"] = args.auto_mode
     if getattr(args, "no_soi", False):
@@ -113,6 +150,19 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         sys.stdout.write(mode.prompt if mode.prompt.endswith("\n") else mode.prompt + "\n")
+        return 0
+
+    if args.command == "web":
+        from ollama.webserver import serve
+
+        if getattr(args, "no_soi", False):
+            config = replace(config, soi_enabled=False)
+        try:
+            get_mode(args.mode)
+        except KeyError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        serve(host=args.bind, port=args.port, config=config, mode_id=args.mode)
         return 0
 
     if args.command == "ping":
@@ -228,6 +278,8 @@ def main(argv: list[str] | None = None) -> int:
             f"AINet OAC  mode={session.mode.id}  model={config.model}  "
             f"soi_file={config.soi_idle_seconds:.0f}s  "
             f"soi_read={config.soi_read_refresh_idle_seconds:.0f}s  "
+            f"soi_timeout={config.soi_timeout_s:.0f}s  "
+            f"think oac={int(config.oac_think)} soi={int(config.soi_think)}  "
             f"db={config.db_root}"
         )
         if session.session_id:

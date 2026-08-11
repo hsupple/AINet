@@ -13,7 +13,8 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
 2. Protected files
    - Rules.txt: AI may read. AI must never write, rename, move, or delete.
    - Calendar.json: AI may read. Writes are code-only (scheduler/system), never AI tools.
-   - Changelog.json: AI must not rewrite. Changes are recorded only via append_changelog / automatic tool logging.
+   - Changelog.json: pending OAC→SOI queue only. AI must not rewrite. Tool writes and filed/discarded turns are appended to Masterlog.json (kept forever).
+   - Masterlog.json: append-only permanent archive of filed/discarded oac_turns (full user_text/assistant_text + filed_to). Never delete or rewrite. AI may read.
 
 3. Efficiency / COP load order
    - For a COP, load in this order: Read.json → Plan.json → History.json only if needed → Profile.json almost never in live talk.
@@ -40,14 +41,23 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
    - AI1 OAC (Orchestrator of Conversation): live interface. READ tools + allowlisted quiz helpers
      (should_suggest_quiz, list_quiz_candidates, start_quiz, record_quiz_answer, get_quiz_status).
      Short-term chat lives in db/runtime/oac/ (including quiz_active.json). OAC cannot use general DB writes.
-   - Every OAC user turn is stacked onto Changelog.json as action=oac_turn with full user_text (and assistant_text) and soi_status=pending. That content stays pending until SOI files it into proper leaves or marks it discarded.
+   - Every OAC user turn is stacked onto Changelog.json as action=oac_turn with full user_text (and assistant_text) and soi_status=pending. After SOI files or discards it, the host appends that entry to Masterlog.json (kept forever) and drops it from the Changelog queue. Nothing is deleted from Masterlog.
    - AI2 SOI (Slave of Information) has two phases:
        Phase 1 filing — after OAC idle soi_idle_seconds (default 45s): process pending oac_turn + unfiled Inbox; mutate DB; mark changelog entries filed/discarded.
-         Research / topic-bound turns → upsert_research_session (and complete_research_session when done)
-         under Hayden/Research/Sessions/; lasting topic facts also go to Topics/<Slug>/Notes.
+         File by CONTENT, never by OAC mode_id. Learning/mechanisms/topic Q&A
+         (even in companion chat) → file_by_id(dest=research). Host copies stored
+         turn text into Sessions + Topics/<Slug>/Notes.json and History.json.
+         Identity/voice/psychology/habits use dest=identity|voice|psychology|habits
+         the same way (Notes + History under that folder). Prefer storing;
+         only discard pure greetings. Lifestyle/places/prefs are not research.
+         Host only marks soi_status filed/discarded with evidence: real tool mutations,
+         host research safety-net, or ephemeral discard. JSON-only SOI replies leave
+         entries pending. filed/discarded lists must use real Changelog entry ids.
          Lasting writes auto-append to that folder's Read.json read_changelog and set needs_update=true (mark_read_stale helper).
        Phase 2 Read refresh — only when filing queue is clear AND OAC idle soi_read_refresh_idle_seconds (default 600s / 10m):
-         discover ONLY Read.json with needs_update=true (or pending read_changelog); skip clean Reads; rewrite those digests; then mark_read_refreshed (needs_update=false, changelog entries consumed).
+         discover ONLY Read.json with needs_update=true; rewrite those short digests (do not dump into Notes);
+         observe speech/tone/swearing/personality evidence from Masterlog into Identity/Voice.json;
+         then mark_read_refreshed.
    - SOI state lives under db/runtime/soi/. OAC must not mutate the personal DB except via allowlisted quiz score tools; host/runtime owns Changelog handoff writes.
 
 4c. Research sessions + quiz
