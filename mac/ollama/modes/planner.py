@@ -10,7 +10,6 @@ MODE = Mode(
     prompt=planner_prompt.PROMPT,
     tools_enabled=True,
     tool_names=READ_TOOLS + META_TOOLS,
-    allows_topic=False,
     role="oac",
     allow_mutations=False,
 )

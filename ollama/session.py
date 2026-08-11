@@ -15,9 +15,8 @@ from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
 from ollama.conversation_store import ConversationStore
 from ollama.modes import get_mode
-from ollama.modes.base import QUIZ_TOOLS, READ_TOOLS, Mode
+from ollama.modes.base import READ_TOOLS, Mode
 from ollama.router import suggest_mode
-from ollama.topics import ensure_topic, load_topic_context
 
 # on_tool(phase, name, detail) — phase is "start" | "done"
 ToolCallback = Callable[[str, str, dict[str, Any]], None]
@@ -35,12 +34,7 @@ _MUTATING = {
     "append_changelog",
     "capture_inbox",
     "file_by_id",
-    "upsert_research_session",
-    "complete_research_session",
 }
-
-# Host-owned quiz helpers — OAC may call these even when allow_mutations=False.
-_OAC_QUIZ = set(QUIZ_TOOLS)
 
 
 class ChatSession:
@@ -49,7 +43,6 @@ class ChatSession:
         mode: Mode,
         config: OllamaConfig | None = None,
         client: OllamaClient | None = None,
-        topic_title: str | None = None,
         *,
         auto_mode: bool | None = None,
         persist_conversation: bool | None = None,
@@ -62,7 +55,6 @@ class ChatSession:
         self.auto_mode = self.config.auto_mode if auto_mode is None else auto_mode
         self.mode_locked = False
         self.full_tools_unlocked = False
-        self.topic: dict[str, Any] | None = None
         self.messages: list[dict[str, Any]] = []
         self.last_activity = time.monotonic()
         self.persist_conversation = (
@@ -74,10 +66,7 @@ class ChatSession:
         self.session_id: str | None = None
         if self.persist_conversation and mode.role == "oac":
             self.store = ConversationStore(self.config.db_root)
-            self.session_id = self.store.ensure_session(
-                mode_id=mode.id,
-                topic=topic_title,
-            )
+            self.session_id = self.store.ensure_session(mode_id=mode.id)
         self._rebuild_system()
         if resume_session and self.store and self.session_id:
             prior = self.store.turns_as_messages(
@@ -85,8 +74,6 @@ class ChatSession:
                 limit=max(2, self.config.max_history_messages // 2),
             )
             self.messages.extend(prior)
-        if topic_title:
-            self.bind_topic(topic_title)
 
     def touch(self) -> None:
         self.last_activity = time.monotonic()
@@ -105,26 +92,15 @@ class ChatSession:
                 if (t.get("function") or {}).get("name") not in {"get_tools", "getTools"}
             ]
         if not self.mode.allow_mutations:
-            # OAC: read + web + quiz helpers only (never general writes)
             if self.full_tools_unlocked:
-                return tools_subset(READ_TOOLS + QUIZ_TOOLS + ("get_tools",))
-            return tools_subset(self.mode.tool_names or READ_TOOLS + QUIZ_TOOLS + ("get_tools",))
+                return tools_subset(READ_TOOLS + ("get_tools",))
+            return tools_subset(self.mode.tool_names or READ_TOOLS + ("get_tools",))
         if self.full_tools_unlocked or self.mode.tool_names is None:
             return tools_subset(None)
         return tools_subset(self.mode.tool_names)
 
     def _rebuild_system(self) -> None:
         system: list[dict[str, Any]] = [{"role": "system", "content": self.mode.prompt}]
-        if self.topic and self.mode.allows_topic:
-            system.append(
-                {
-                    "role": "system",
-                    "content": (
-                        f"Topic '{self.topic.get('title')}' bound. "
-                        f"{load_topic_context(self.db, self.topic['slug'], lean=self.config.lean_topic_context)}"
-                    ),
-                }
-            )
         dialogue = [m for m in self.messages if m.get("role") != "system"]
         self.messages = system + dialogue
 
@@ -132,10 +108,7 @@ class ChatSession:
         self.messages = []
         self.full_tools_unlocked = False
         if self.store and self.mode.role == "oac":
-            self.session_id = self.store.new_session(
-                mode_id=self.mode.id,
-                topic=self.topic["title"] if self.topic else None,
-            )
+            self.session_id = self.store.new_session(mode_id=self.mode.id)
         self._rebuild_system()
         self.touch()
 
@@ -146,15 +119,6 @@ class ChatSession:
         self._rebuild_system()
         self.touch()
         return self.mode
-
-    def bind_topic(self, title: str) -> dict[str, Any]:
-        self.topic = ensure_topic(self.db, title)
-        if not self.mode.allows_topic:
-            self.set_mode("research", lock=self.mode_locked)
-        else:
-            self._rebuild_system()
-        self.touch()
-        return self.topic
 
     def ask(
         self,
@@ -193,8 +157,6 @@ class ChatSession:
         extra_mutating = {
             "mark_read_stale",
             "mark_read_refreshed",
-            "start_quiz",
-            "record_quiz_answer",
         }
         soi_opts = (
             {"temperature": 0, "num_predict": 900}
@@ -292,7 +254,6 @@ class ChatSession:
                 user_text=user_text,
                 assistant_text=final_text,
                 mode_id=self.mode.id,
-                topic=self.topic["title"] if self.topic else None,
             )
 
         self.touch()
@@ -352,13 +313,7 @@ class ChatSession:
         ):
             old = self.mode.id
             self.set_mode(decision.mode_id, lock=False)
-            note = f"(auto → {decision.mode_id}; was {old}; {decision.reason})"
-            if decision.mode_id == "research" and not self.topic:
-                title = _guess_topic_title(user_text)
-                if title:
-                    info = self.bind_topic(title)
-                    note += f" (topic: {info['title']})"
-            return note
+            return f"(auto → {decision.mode_id}; was {old}; {decision.reason})"
         return None
 
     def _trim_history(self) -> None:
@@ -406,7 +361,7 @@ class ChatSession:
             )
 
         if not self.mode.allow_mutations:
-            allowed = set(READ_TOOLS) | _OAC_QUIZ | {"get_tools", "getTools"}
+            allowed = set(READ_TOOLS) | {"get_tools", "getTools"}
             if self.mode.tool_names:
                 allowed |= set(self.mode.tool_names)
             if name not in allowed or name in _MUTATING:
@@ -414,8 +369,7 @@ class ChatSession:
                     "ok": False,
                     "error": (
                         f"OAC cannot use tool '{name}'. "
-                        "Allowed: read/web + quiz helpers (should_suggest_quiz, "
-                        "list_quiz_candidates, start_quiz, record_quiz_answer, get_quiz_status). "
+                        "Allowed: read/web. "
                         "SOI files lasting DB writes from the changelog after idle."
                     ),
                 }
@@ -484,11 +438,4 @@ def _redact_assistant_fields(obj: Any) -> Any:
         }
     if isinstance(obj, list):
         return [_redact_assistant_fields(x) for x in obj]
-    return obj
-
-
-def _guess_topic_title(user_text: str) -> str | None:
-    """Cheap title for auto research bind — keep short."""
-    from ollama.content_filing import topic_title_from_text
-
-    return topic_title_from_text(user_text)
+        return obj

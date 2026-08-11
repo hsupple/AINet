@@ -38,10 +38,6 @@ db/Hayden/Memories/Wounds/**
 db/Hayden/Memories/Wins/**
 !db/Hayden/Memories/**/.gitkeep
 db/Hayden/Inbox/Captures.json
-db/Hayden/Research/Sessions/*.json
-db/Hayden/Research/Topics/**
-!db/Hayden/Research/Topics/.gitkeep
-db/Hayden/Research/Scores.json
 db/**/History.json
 db/**/History/**
 !db/**/History/.gitkeep

@@ -10,12 +10,13 @@ from typing import Any
 from ainet.tools.ops import DatabaseTools
 from ainet.tools.registry import catalog_tools, dispatch, tools_subset
 from ollama.client import OllamaClient, ThinkingCallback, TokenCallback
+from ollama.content_filing import cop_name_in_text
+from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
 from ollama.conversation_store import ConversationStore
 from ollama.modes import get_mode
-from ollama.modes.base import QUIZ_TOOLS, READ_TOOLS, Mode
+from ollama.modes.base import READ_TOOLS, Mode
 from ollama.router import suggest_mode
-from ollama.topics import ensure_topic, load_topic_context
 
 # on_tool(phase, name, detail) — phase is "start" | "done"
 ToolCallback = Callable[[str, str, dict[str, Any]], None]
@@ -32,12 +33,8 @@ _MUTATING = {
     "archive_to_history",
     "append_changelog",
     "capture_inbox",
-    "upsert_research_session",
-    "complete_research_session",
+    "file_by_id",
 }
-
-# Host-owned quiz helpers — OAC may call these even when allow_mutations=False.
-_OAC_QUIZ = set(QUIZ_TOOLS)
 
 
 class ChatSession:
@@ -46,7 +43,6 @@ class ChatSession:
         mode: Mode,
         config: OllamaConfig | None = None,
         client: OllamaClient | None = None,
-        topic_title: str | None = None,
         *,
         auto_mode: bool | None = None,
         persist_conversation: bool | None = None,
@@ -59,7 +55,6 @@ class ChatSession:
         self.auto_mode = self.config.auto_mode if auto_mode is None else auto_mode
         self.mode_locked = False
         self.full_tools_unlocked = False
-        self.topic: dict[str, Any] | None = None
         self.messages: list[dict[str, Any]] = []
         self.last_activity = time.monotonic()
         self.persist_conversation = (
@@ -71,10 +66,7 @@ class ChatSession:
         self.session_id: str | None = None
         if self.persist_conversation and mode.role == "oac":
             self.store = ConversationStore(self.config.db_root)
-            self.session_id = self.store.ensure_session(
-                mode_id=mode.id,
-                topic=topic_title,
-            )
+            self.session_id = self.store.ensure_session(mode_id=mode.id)
         self._rebuild_system()
         if resume_session and self.store and self.session_id:
             prior = self.store.turns_as_messages(
@@ -82,8 +74,6 @@ class ChatSession:
                 limit=max(2, self.config.max_history_messages // 2),
             )
             self.messages.extend(prior)
-        if topic_title:
-            self.bind_topic(topic_title)
 
     def touch(self) -> None:
         self.last_activity = time.monotonic()
@@ -94,27 +84,23 @@ class ChatSession:
     def _active_tools(self) -> list[dict[str, Any]] | None:
         if not self.mode.tools_enabled:
             return None
+        if self.mode.role == "soi":
+            names = self.mode.tool_names or ()
+            return [
+                t
+                for t in tools_subset(names)
+                if (t.get("function") or {}).get("name") not in {"get_tools", "getTools"}
+            ]
         if not self.mode.allow_mutations:
-            # OAC: read + web + quiz helpers only (never general writes)
             if self.full_tools_unlocked:
-                return tools_subset(READ_TOOLS + QUIZ_TOOLS + ("get_tools",))
-            return tools_subset(self.mode.tool_names or READ_TOOLS + QUIZ_TOOLS + ("get_tools",))
+                return tools_subset(READ_TOOLS + ("get_tools",))
+            return tools_subset(self.mode.tool_names or READ_TOOLS + ("get_tools",))
         if self.full_tools_unlocked or self.mode.tool_names is None:
             return tools_subset(None)
         return tools_subset(self.mode.tool_names)
 
     def _rebuild_system(self) -> None:
         system: list[dict[str, Any]] = [{"role": "system", "content": self.mode.prompt}]
-        if self.topic and self.mode.allows_topic:
-            system.append(
-                {
-                    "role": "system",
-                    "content": (
-                        f"Topic '{self.topic.get('title')}' bound. "
-                        f"{load_topic_context(self.db, self.topic['slug'], lean=self.config.lean_topic_context)}"
-                    ),
-                }
-            )
         dialogue = [m for m in self.messages if m.get("role") != "system"]
         self.messages = system + dialogue
 
@@ -122,10 +108,7 @@ class ChatSession:
         self.messages = []
         self.full_tools_unlocked = False
         if self.store and self.mode.role == "oac":
-            self.session_id = self.store.new_session(
-                mode_id=self.mode.id,
-                topic=self.topic["title"] if self.topic else None,
-            )
+            self.session_id = self.store.new_session(mode_id=self.mode.id)
         self._rebuild_system()
         self.touch()
 
@@ -136,15 +119,6 @@ class ChatSession:
         self._rebuild_system()
         self.touch()
         return self.mode
-
-    def bind_topic(self, title: str) -> dict[str, Any]:
-        self.topic = ensure_topic(self.db, title)
-        if not self.mode.allows_topic:
-            self.set_mode("research", lock=self.mode_locked)
-        else:
-            self._rebuild_system()
-        self.touch()
-        return self.topic
 
     def ask(
         self,
@@ -158,7 +132,6 @@ class ChatSession:
         self.touch()
         route_note = self._maybe_autoroute(user_text)
         if route_note and on_token is not None:
-            # Stream path: emit route note as its own line before tokens.
             on_token(f"{route_note}\n")
 
         self.messages.append({"role": "user", "content": user_text})
@@ -167,8 +140,10 @@ class ChatSession:
         tools = self._active_tools()
         final_text = ""
         streamed_any = False
+        self.last_tool_names: list[str] = []
+        self.last_mutating_calls: list[dict[str, Any]] = []
+        self.last_tool_rounds = 0
         think = self.config.soi_think if self.mode.role == "soi" else self.config.oac_think
-        # SOI jobs (esp. with thinking) need a longer socket timeout.
         req_timeout = (
             self.config.soi_timeout_s if self.mode.role == "soi" else self.config.timeout_s
         )
@@ -179,7 +154,17 @@ class ChatSession:
             if on_token:
                 on_token(delta)
 
-        for _ in range(self.config.max_tool_rounds):
+        extra_mutating = {
+            "mark_read_stale",
+            "mark_read_refreshed",
+        }
+        soi_opts = (
+            {"temperature": 0, "num_predict": 900}
+            if self.mode.role == "soi"
+            else None
+        )
+
+        for _round in range(self.config.max_tool_rounds):
             if stream or on_token or on_thinking:
                 response = self.client.chat_stream(
                     self.messages,
@@ -188,6 +173,7 @@ class ChatSession:
                     on_token=_token if on_token else None,
                     on_thinking=on_thinking,
                     timeout_s=req_timeout,
+                    options=soi_opts,
                 )
             else:
                 response = self.client.chat(
@@ -195,29 +181,49 @@ class ChatSession:
                     tools=tools,
                     think=think,
                     timeout_s=req_timeout,
+                    options=soi_opts,
                 )
             message = response.get("message") or {}
             self.messages.append(message)
 
             tool_calls = message.get("tool_calls") or []
+            parsed_from_text = False
             if not tool_calls:
                 final_text = (message.get("content") or "").strip()
-                break
+                if self.mode.role == "soi":
+                    tool_calls = parse_content_tool_calls(final_text)
+                    parsed_from_text = bool(tool_calls)
+                if not tool_calls:
+                    break
 
-            # Finish the streamed line before tool banners.
+            self.last_tool_rounds += 1
             if streamed_any and on_token:
                 on_token("\n")
                 streamed_any = False
             elif streamed_any and on_thinking and not on_token:
-                # Thinking-only stream still needs a visual break before tools.
                 on_thinking("\n")
 
             for call in tool_calls:
                 name, args = self._tool_call_parts(call)
+                if self.mode.role == "soi":
+                    name, args = normalize_soi_tool(name, args)
+                    call = {"function": {"name": name, "arguments": args}}
+                if not name:
+                    continue
                 if on_tool:
                     on_tool("start", name, {"arguments": args})
                 result = self._run_tool_call(call)
-                if name in {"get_tools", "getTools"}:
+                self.last_tool_names.append(name)
+                if name in _MUTATING or name in extra_mutating:
+                    self.last_mutating_calls.append(
+                        {
+                            "tool": name,
+                            "args": args,
+                            "ok": bool(result.get("ok", True)) if isinstance(result, dict) else True,
+                            "result": result if isinstance(result, dict) else {},
+                        }
+                    )
+                if name in {"get_tools", "getTools"} and self.mode.role != "soi":
                     self.full_tools_unlocked = True
                     tools = self._active_tools()
                 if on_tool:
@@ -236,6 +242,8 @@ class ChatSession:
                         "content": json.dumps(payload, ensure_ascii=False),
                     }
                 )
+            if parsed_from_text:
+                break
             self._trim_history()
         else:
             final_text = "I hit the tool-call limit for this turn. Try again with a narrower ask."
@@ -246,11 +254,9 @@ class ChatSession:
                 user_text=user_text,
                 assistant_text=final_text,
                 mode_id=self.mode.id,
-                topic=self.topic["title"] if self.topic else None,
             )
 
         self.touch()
-        # When streaming, tokens were already printed — return text for callers/store only.
         if stream and on_token is not None:
             if route_note and final_text:
                 return f"{route_note}\n{final_text}"
@@ -355,7 +361,7 @@ class ChatSession:
             )
 
         if not self.mode.allow_mutations:
-            allowed = set(READ_TOOLS) | _OAC_QUIZ | {"get_tools", "getTools"}
+            allowed = set(READ_TOOLS) | {"get_tools", "getTools"}
             if self.mode.tool_names:
                 allowed |= set(self.mode.tool_names)
             if name not in allowed or name in _MUTATING:
@@ -363,8 +369,7 @@ class ChatSession:
                     "ok": False,
                     "error": (
                         f"OAC cannot use tool '{name}'. "
-                        "Allowed: read/web + quiz helpers (should_suggest_quiz, "
-                        "list_quiz_candidates, start_quiz, record_quiz_answer, get_quiz_status). "
+                        "Allowed: read/web. "
                         "SOI files lasting DB writes from the changelog after idle."
                     ),
                 }
@@ -382,10 +387,45 @@ class ChatSession:
                 ),
             }
 
+        if self.mode.role == "soi" and name in {"create_cop", "create_folder"}:
+            path = str(args.get("path") or args.get("folder_path") or "")
+            if "/Courses/" in path.replace("\\", "/") or "/Projects/" in path.replace("\\", "/"):
+                src = self._soi_source_text()
+                if src and not cop_name_in_text(path, src):
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"{name} refused — {path} is not named in user_text. "
+                            "Do not invent COPs."
+                        ),
+                    }
+
         result = dispatch(self.db, name, args)
         if self.mode.role == "soi":
             result = _redact_assistant_fields(result)
         return result
+
+    def _soi_source_text(self) -> str:
+        parts: list[str] = []
+        for message in reversed(self.messages):
+            if message.get("role") != "user":
+                continue
+            raw = str(message.get("content") or "")
+            idx = raw.find("{")
+            if idx < 0:
+                parts.append(raw)
+                break
+            try:
+                obj = json.loads(raw[idx:])
+            except json.JSONDecodeError:
+                parts.append(raw)
+                break
+            if isinstance(obj, dict):
+                for entry in obj.get("changelog_entries") or []:
+                    if isinstance(entry, dict) and entry.get("user_text"):
+                        parts.append(str(entry["user_text"]))
+            break
+        return "\n".join(parts)
 
 
 def _redact_assistant_fields(obj: Any) -> Any:
@@ -398,4 +438,4 @@ def _redact_assistant_fields(obj: Any) -> Any:
         }
     if isinstance(obj, list):
         return [_redact_assistant_fields(x) for x in obj]
-    return obj
+        return obj

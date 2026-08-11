@@ -2,7 +2,7 @@
 """Reset the local AINet database to an empty skeleton.
 
 Keeps schema (Rules.txt, Folderrules.json) and the domain folder tree.
-Clears OAC/SOI queues, runtime, generated research/people/history, and
+Clears OAC/SOI queues, runtime, generated people/history, and
 empties remaining JSON leaves (named templates when they exist).
 
 Does not touch mac/db. Real db/ is not changed unless you pass --yes.
@@ -52,12 +52,10 @@ GENERATED_FILE_GLOBS = (
     "runtime/oac/current.json",
     "runtime/soi/*.json",
     "runtime/soi/*.jsonl",
-    "Hayden/Research/Sessions/*.json",
     "Hayden/Relationships/People/*.json",
 )
 
 GENERATED_DIR_GLOBS = (
-    "Hayden/Research/Topics/*",
     "School/Courses/*",
     "Hayden/Memories/Childhood/*",
     "Hayden/Memories/Formative/*",
@@ -93,9 +91,6 @@ SKELETON_DIRS = (
     "Hayden/Body",
     "Hayden/Psychology",
     "Hayden/Inbox",
-    "Hayden/Research",
-    "Hayden/Research/Topics",
-    "Hayden/Research/Sessions",
     "Hayden/History",
     "School",
     "School/Courses",
@@ -213,8 +208,6 @@ def _clear_generated(root: Path, plan: ResetPlan, *, dry_run: bool) -> None:
             plan.mark_removed(rel)
             plan.apply(dry_run, lambda p=path: _unlink(p), f"delete {rel}")
 
-    _wipe_children(root, "Hayden/Research/Topics", plan, dry_run=dry_run)
-    _wipe_children(root, "Hayden/Research/Sessions", plan, dry_run=dry_run)
     _wipe_children(root, "Hayden/Relationships/People", plan, dry_run=dry_run)
     _wipe_children(root, "School/Courses", plan, dry_run=dry_run)
     _wipe_children(root, "Hayden/Memories/Childhood", plan, dry_run=dry_run)
@@ -297,9 +290,6 @@ def _reset_json_file(root: Path, path: Path, plan: ResetPlan, *, dry_run: bool) 
         payload = load_default_for_path(rel)
         _write_json(path, payload)
 
-    def write_index() -> None:
-        _write_json(path, {"topics": [], "sessions": [], "last_updated": ""})
-
     def write_empty_shape() -> None:
         data = _load_json(path)
         if not isinstance(data, dict):
@@ -307,13 +297,10 @@ def _reset_json_file(root: Path, path: Path, plan: ResetPlan, *, dry_run: bool) 
             return
         _write_json(path, _empty_value(data))
 
-    if rel == "Hayden/Research/Index.json":
-        plan.apply(dry_run, write_index, f"empty {rel}")
-        return
     if (
         name in TEMPLATE_NAMES
         or rel.endswith("/Read.json")
-        or rel in {"Hayden/Research/Scores.json", "Hayden/Memories/Milestones/Log.json"}
+        or rel in {"Hayden/Memories/Milestones/Log.json"}
     ):
         plan.apply(dry_run, write_template, f"template {rel}")
         return

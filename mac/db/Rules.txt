@@ -6,14 +6,14 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
 1. Sandbox
    - All AI filesystem tools operate only under the database root (`db/`).
    - Path traversal outside the database root is forbidden.
-   - The Mac that runs Ollama and these database tools is this machine.
-   - All paths inside the database use forward slashes (`Hayden/Read.json`) on macOS.
-   - Never use absolute filesystem paths or parent traversal (..) in tool calls. DB paths are always relative with forward slashes.
+   - The PC that runs Ollama and these database tools is a macOS machine.
+   - All paths inside the database use forward slashes (`Hayden/Read.json`) even on macOS.
+   - Never use drive letters, UNC shares, or backslash-only absolute paths in tool calls.
 
 2. Protected files
    - Rules.txt: AI may read. AI must never write, rename, move, or delete.
    - Calendar.json: AI may read. Writes are code-only (scheduler/system), never AI tools.
-   - Changelog.json: live queue. AI must not rewrite. OAC appends pending oac_turns; tool writes may append. After SOI files/discards a turn, the host copies it to Masterlog.json and removes it from Changelog.
+   - Changelog.json: pending OAC→SOI queue only. AI must not rewrite. Tool writes and filed/discarded turns are appended to Masterlog.json (kept forever).
    - Masterlog.json: append-only permanent archive of filed/discarded oac_turns (full user_text/assistant_text + filed_to). Never delete or rewrite. AI may read.
 
 3. Efficiency / COP load order
@@ -30,7 +30,7 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
    - Do not duplicate the same fact across many files; update the canonical location (usually a leaf; Read only holds a short digest/pointer).
 
 4. Hayden personal knowledge
-   - Hayden/ is the full personal model: Identity, Values, Preferences, Habits, Desires, Relationships, Secrets, Memories, Body, Psychology, Research, Inbox.
+   - Hayden/ is the full personal model: Identity, Values, Preferences, Habits, Desires, Relationships, Secrets, Memories, Body, Psychology, Inbox.
    - Always start at Hayden/Read.json, then open the relevant subtree Read.json (e.g. Relationships/Read.json) before deep files.
    - People live at Hayden/Relationships/People/<Name>.json (Person template).
    - Multiple sides of Hayden live in Identity/Sides.json — treat sides as real, not contradictions to erase.
@@ -38,25 +38,24 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
    - If something lasting has no clear home, SOI may use Hayden/Inbox/Captures.json. Ephemeral chatter stays out of the DB.
 
 4b. Dual AI roles
-   - AI1 OAC (Orchestrator of Conversation): live interface. READ tools + allowlisted quiz helpers
-     (should_suggest_quiz, list_quiz_candidates, start_quiz, record_quiz_answer, get_quiz_status).
-     Short-term chat lives in db/runtime/oac/ (including quiz_active.json). OAC cannot use general DB writes.
+   - AI1 OAC (Orchestrator of Conversation): live interface. READ tools + web_search/web_fetch.
+     Short-term chat lives in db/runtime/oac/. OAC cannot use general DB writes.
    - Every OAC user turn is stacked onto Changelog.json as action=oac_turn with full user_text (and assistant_text) and soi_status=pending. After SOI files or discards it, the host appends that entry to Masterlog.json (kept forever) and drops it from the Changelog queue. Nothing is deleted from Masterlog.
    - AI2 SOI (Slave of Information) has two phases:
        Phase 1 filing — after OAC idle soi_idle_seconds (default 45s): process pending oac_turn + unfiled Inbox; mutate DB; mark changelog entries filed/discarded.
-         Research / topic-bound turns → upsert_research_session (and complete_research_session when done)
-         under Hayden/Research/Sessions/; lasting topic facts also go to Topics/<Slug>/Notes.
+         File by CONTENT, never by OAC mode_id.
+         Identity/voice/psychology/habits use dest=identity|voice|psychology|habits
+         (Notes + History under that folder). Prefer storing;
+         only discard pure greetings.
+         Host only marks soi_status filed/discarded with evidence: real tool mutations
+         or ephemeral discard. JSON-only SOI replies leave
+         entries pending. filed/discarded lists must use real Changelog entry ids.
          Lasting writes auto-append to that folder's Read.json read_changelog and set needs_update=true (mark_read_stale helper).
        Phase 2 Read refresh — only when filing queue is clear AND OAC idle soi_read_refresh_idle_seconds (default 600s / 10m):
-         discover ONLY Read.json with needs_update=true (or pending read_changelog); skip clean Reads; rewrite those digests; then mark_read_refreshed (needs_update=false, changelog entries consumed).
-   - SOI state lives under db/runtime/soi/. OAC must not mutate the personal DB except via allowlisted quiz score tools; host/runtime owns Changelog handoff writes.
-
-4c. Research sessions + quiz
-   - Topics live under Hayden/Research/Topics/<Slug>/ (Read, Notes, History).
-   - Session entities: Hayden/Research/Sessions/<SessionId>.json — subject, length, details_covered,
-     topic link, memory_score, status open|complete. Discoverable via Research/Index.json (topics + sessions).
-   - Durable scores: Hayden/Research/Scores.json (sessions + topics). Updated by record_quiz_answer only.
-   - OAC may occasionally suggest a quiz (should_suggest_quiz throttle); on confirm, start_quiz → ask/grade → record_quiz_answer.
+         discover ONLY Read.json with needs_update=true; rewrite those short digests (do not dump into Notes);
+         observe speech/tone/swearing/personality evidence from Masterlog into Identity/Voice.json;
+         then mark_read_refreshed.
+   - SOI state lives under db/runtime/soi/. OAC must not mutate the personal DB; host/runtime owns Changelog handoff writes.
 
 5. Secrets
    - Hayden/Secrets/ is a private vault. The AI may read it to understand Hayden.
@@ -88,5 +87,5 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
    - API key: set environment variable BRAVE_API_KEY or AINET_BRAVE_API_KEY to your Brave Search
      API subscription token (https://brave.com/search/api/). If the key is missing, web_search
      fails clearly — create a free Brave Search API key and export it before relying on search.
-   - macOS: add to ~/.zshrc, or export for the current Terminal session:
-       export BRAVE_API_KEY="your_token_here"
+   - Windows: set via System Environment Variables, or in PowerShell for the session:
+       $env:BRAVE_API_KEY = "your_token_here"

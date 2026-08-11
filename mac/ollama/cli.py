@@ -11,17 +11,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import queue
 import sys
+import tempfile
+import threading
 from dataclasses import replace
 from pathlib import Path
 
 from ollama.client import OllamaClient, OllamaError
 from ollama.config import OllamaConfig
 from ollama.idle import IdleSOIWatcher
+from ollama.soi_log import status_line
 from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
 from ollama.router import suggest_mode
 from ollama.session import ChatSession
 from ollama.soi_worker import SOIWorker
+from ollama.tts import SpeechPipeline, TtsClient, TtsConfig
 
 
 def _configure_stdio() -> None:
@@ -32,6 +38,97 @@ def _configure_stdio() -> None:
                 reconfigure(encoding="utf-8")
             except Exception:
                 pass
+
+
+def _play_wav_bytes(data: bytes) -> None:
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(data)
+            path = tmp.name
+        if sys.platform == "win32":
+            import winsound
+
+            winsound.PlaySound(path, winsound.SND_FILENAME)
+        else:
+            import subprocess
+
+            for cmd in (
+                ["afplay", path],
+                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path],
+                ["aplay", path],
+            ):
+                try:
+                    subprocess.run(cmd, check=False, capture_output=True)
+                    break
+                except OSError:
+                    continue
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def _chat_turn(session: ChatSession, config: OllamaConfig, line: str, *, voice: bool) -> str:
+    """Stream tokens to stdout; optionally speak sentence chunks via TTS."""
+    pipe: SpeechPipeline | None = None
+    play_q: queue.Queue[bytes | None] | None = None
+    player: threading.Thread | None = None
+
+    if voice and config.tts_enabled:
+        client = TtsClient(
+            TtsConfig(
+                url=config.tts_url,
+                enabled=True,
+                language=config.tts_language,
+                timeout_s=config.tts_timeout_s,
+            )
+        )
+        if not client.healthy():
+            print(f"(voice offline @ {config.tts_url})", file=sys.stderr, flush=True)
+        else:
+            play_q = queue.Queue()
+
+            def _player() -> None:
+                assert play_q is not None
+                while True:
+                    item = play_q.get()
+                    if item is None:
+                        return
+                    _play_wav_bytes(item)
+
+            player = threading.Thread(target=_player, name="ainet-tts-play", daemon=True)
+            player.start()
+
+            def _on_audio(wav: bytes, _seq: int, _text: str) -> None:
+                assert play_q is not None
+                play_q.put(wav)
+
+            def _on_err(err: str) -> None:
+                print(f"\n(voice error: {err})", file=sys.stderr, flush=True)
+
+            pipe = SpeechPipeline(client, on_audio=_on_audio, on_error=_on_err, enabled=True)
+
+    def _on_token(delta: str) -> None:
+        sys.stdout.write(delta)
+        sys.stdout.flush()
+        if pipe is not None:
+            pipe.feed(delta)
+
+    try:
+        reply = session.ask(line, stream=True, on_token=_on_token)
+    finally:
+        if pipe is not None:
+            pipe.close()
+        if play_q is not None:
+            play_q.put(None)
+        if player is not None:
+            player.join(timeout=300.0)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    return reply
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,10 +172,22 @@ def main(argv: list[str] | None = None) -> int:
 
     chat = sub.add_parser("chat", help="OAC interactive or one-shot chat (SOI runs after idle)")
     chat.add_argument("--mode", default=DEFAULT_MODE_ID, help="OAC flavor mode id")
-    chat.add_argument("--topic", default=None, help="Research topic title")
     chat.add_argument("--auto-mode", dest="auto_mode", action="store_true", default=None)
     chat.add_argument("--no-auto-mode", dest="auto_mode", action="store_false")
     chat.add_argument("--no-soi", action="store_true", help="Disable idle SOI watcher")
+    chat.add_argument(
+        "--voice",
+        dest="voice",
+        action="store_true",
+        default=None,
+        help="Speak replies via Qwen3-TTS (default: on when TTS enabled)",
+    )
+    chat.add_argument(
+        "--no-voice",
+        dest="voice",
+        action="store_false",
+        help="Disable spoken replies",
+    )
     chat.add_argument(
         "--soi-idle",
         type=float,
@@ -98,6 +207,14 @@ def main(argv: list[str] | None = None) -> int:
     route.add_argument("message")
 
     sub.add_parser("ping", help="Check Ollama connectivity")
+
+    web = sub.add_parser("web", help="LAN web chat UI (default 0.0.0.0:1111)")
+    web.add_argument("--bind", default="0.0.0.0", help="Bind address (0.0.0.0 = all interfaces)")
+    web.add_argument("--port", type=int, default=1111, help="TCP port")
+    web.add_argument("--mode", default=DEFAULT_MODE_ID, help="Initial OAC mode")
+    web.add_argument("--no-soi", action="store_true", help="Disable idle SOI watcher")
+    web.add_argument("--no-tts", action="store_true", help="Disable Qwen3-TTS voice")
+
     soi_run = sub.add_parser("soi-run", help="Run SOI now (filing and/or Read refresh)")
     soi_run.add_argument(
         "--phase",
@@ -124,6 +241,8 @@ def main(argv: list[str] | None = None) -> int:
         updates["auto_mode"] = args.auto_mode
     if getattr(args, "no_soi", False):
         updates["soi_enabled"] = False
+    if getattr(args, "no_tts", False):
+        updates["tts_enabled"] = False
     if getattr(args, "soi_idle", None) is not None:
         updates["soi_idle_seconds"] = args.soi_idle
     if getattr(args, "soi_read_idle", None) is not None:
@@ -143,6 +262,19 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         sys.stdout.write(mode.prompt if mode.prompt.endswith("\n") else mode.prompt + "\n")
+        return 0
+
+    if args.command == "web":
+        from ollama.webserver import serve
+
+        if getattr(args, "no_soi", False):
+            config = replace(config, soi_enabled=False)
+        try:
+            get_mode(args.mode)
+        except KeyError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        serve(host=args.bind, port=args.port, config=config, mode_id=args.mode)
         return 0
 
     if args.command == "ping":
@@ -180,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "soi-status":
-        worker = SOIWorker(config, on_status=lambda msg: print(msg, flush=True))
+        worker = SOIWorker(config)
         state = None
         if worker.state_path.exists():
             try:
@@ -198,16 +330,16 @@ def main(argv: list[str] | None = None) -> int:
                     "needs_read_refresh": worker.needs_read_refresh(),
                     "read_json_count": len(worker.list_read_json_paths()),
                     "state_file": str(worker.state_path),
-                    "log_file": str(worker.log.path),
                     "state": state,
                 },
                 indent=2,
+                ensure_ascii=False,
             )
         )
         return 0
 
     if args.command == "soi-run":
-        worker = SOIWorker(config, on_status=lambda msg: print(msg, flush=True))
+        worker = SOIWorker(config)
         phase = getattr(args, "phase", "auto")
         if phase == "filing":
             result = worker.run_filing()
@@ -220,7 +352,6 @@ def main(argv: list[str] | None = None) -> int:
                 result = worker.run_read_refresh()
             else:
                 result = {"ok": True, "ran": False, "reason": "no filing or read-refresh work"}
-                print("(SOI: no filing or read-refresh work)", flush=True)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0 if result.get("ok") else 1
 
@@ -231,54 +362,17 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         if mode.role != "oac":
-            print("chat is for OAC flavors (companion/conversation/research/planner). Use soi-run for SOI.")
+            print("chat is for OAC flavors (companion/conversation/planner). Use soi-run for SOI.")
             return 2
+        voice = True if getattr(args, "voice", None) is None else bool(args.voice)
         session = ChatSession(
             mode=mode,
             config=config,
-            topic_title=args.topic,
             auto_mode=config.auto_mode,
         )
-        if args.topic:
-            print(f"(topic bound: {session.topic['path']})")
-
-        def _on_token(delta: str) -> None:
-            sys.stdout.write(delta)
-            sys.stdout.flush()
-
-        def _on_tool(phase: str, name: str, detail: dict) -> None:
-            if phase == "start":
-                args_obj = detail.get("arguments") or {}
-                # Keep banner short — prefer query/path/url keys.
-                hint = ""
-                for key in ("query", "path", "url", "q"):
-                    if key in args_obj and args_obj[key]:
-                        hint = f" {key}={args_obj[key]!r}"
-                        break
-                if not hint and args_obj:
-                    raw = json.dumps(args_obj, ensure_ascii=False)
-                    hint = f" {raw[:120]}{'…' if len(raw) > 120 else ''}"
-                print(f"\n(tool → {name}{hint})", flush=True)
-            elif phase == "done":
-                ok = detail.get("ok", True)
-                summary = detail.get("summary") or ""
-                mark = "✓" if ok else "✗"
-                print(f"(tool {mark} {name}: {summary})", flush=True)
-
-        def _ask_live(text: str) -> str:
-            reply = session.ask(
-                text,
-                stream=True,
-                on_token=_on_token,
-                on_tool=_on_tool,
-            )
-            # End the turn on its own line after streamed tokens / tool banners.
-            print(flush=True)
-            return reply
-
         if args.message is not None:
             try:
-                _ask_live(args.message)
+                _chat_turn(session, config, args.message, voice=voice)
             except OllamaError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 1
@@ -287,21 +381,21 @@ def main(argv: list[str] | None = None) -> int:
         watcher = IdleSOIWatcher(
             session,
             config,
-            on_status=lambda msg: print(msg, flush=True),
+            on_status=lambda msg: print(status_line(msg), flush=True),
         )
         watcher.start()
         print(
             f"AINet OAC  mode={session.mode.id}  model={config.model}  "
             f"soi_file={config.soi_idle_seconds:.0f}s  "
             f"soi_read={config.soi_read_refresh_idle_seconds:.0f}s  "
+            f"soi_timeout={config.soi_timeout_s:.0f}s  "
+            f"think oac={int(config.oac_think)} soi={int(config.soi_think)}  "
+            f"voice={'on' if voice and config.tts_enabled else 'off'}  "
             f"db={config.db_root}"
         )
         if session.session_id:
             print(f"oac_session={session.session_id}")
-        if session.topic:
-            print(f"topic={session.topic['title']}  path={session.topic['path']}")
-        print(f"soi_log={config.db_root}/runtime/soi/events.jsonl")
-        print("Commands: /exit  /reset  /mode <id>  /auto  /topic <title>  /soi")
+        print("Commands: /exit  /reset  /mode <id>  /auto  /soi  /voice")
         try:
             while True:
                 try:
@@ -323,14 +417,12 @@ def main(argv: list[str] | None = None) -> int:
                     session.mode_locked = False
                     print("(auto flavor on)")
                     continue
+                if line == "/voice":
+                    voice = not voice
+                    print(f"(voice={'on' if voice else 'off'})")
+                    continue
                 if line == "/soi":
-                    if watcher.busy:
-                        print("(SOI already running — wait for it to finish)")
-                        continue
-                    result = SOIWorker(
-                        config,
-                        on_status=lambda msg: print(msg, flush=True),
-                    ).run_once()
+                    result = SOIWorker(config).run_once()
                     print(json.dumps(result, indent=2, ensure_ascii=False))
                     session.touch()
                     continue
@@ -347,18 +439,8 @@ def main(argv: list[str] | None = None) -> int:
                         continue
                     print(f"(locked OAC mode={session.mode.id}; /auto to unlock)")
                     continue
-                if line.startswith("/topic "):
-                    title = line.split(None, 1)[1].strip()
-                    if not title:
-                        print("usage: /topic <title>")
-                        continue
-                    info = session.bind_topic(title)
-                    print(f"(topic bound: {info['path']}; mode={session.mode.id})")
-                    continue
-                if watcher.busy:
-                    print("(note: SOI is filing — reply may be slow or time out)")
                 try:
-                    _ask_live(line)
+                    _chat_turn(session, config, line, voice=voice)
                 except OllamaError as exc:
                     print(f"error: {exc}")
                     continue

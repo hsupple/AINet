@@ -56,9 +56,6 @@
       "Hayden/Body",
       "Hayden/Psychology",
       "Hayden/Inbox",
-      "Hayden/Research",
-      "Hayden/Research/Topics",
-      "Hayden/Research/Sessions",
       "Hayden/History",
       "School/Courses",
       "School/History",
@@ -83,7 +80,6 @@
     "Memories": "Autobiography by category, including Milestones for the most important turning points",
     "Body": "Health, energy, sensory",
     "Psychology": "Triggers, coping, fears, attachment, defenses",
-    "Research": "Deep topic threads under Topics/<Slug>/ plus Sessions/<Id>.json logs and Scores.json",
     "Inbox": "Unsorted lasting scraps in Captures.json — file later via dormant"
   },
   "cop_templates": {
@@ -115,7 +111,6 @@
     "Person.json": "Dossier for one person under Hayden/Relationships/People/.",
     "Decisions.json": "Settled decisions for a project.",
     "Open Questions.json": "Unresolved questions.",
-    "Scores.json": "Durable quiz/memory scores for Research sessions and topics (host quiz tools update).",
     "History/": "Archived/rolled-off files; keep active JSON lean."
   },
   "limits": {

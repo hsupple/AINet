@@ -20,7 +20,6 @@ MODE = Mode(
         "create_json",
         "file_by_id",
     ),
-    allows_topic=False,
     role="soi",
     allow_mutations=True,
 )

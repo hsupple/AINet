@@ -36,6 +36,11 @@ class OllamaConfig:
     soi_idle_seconds: float = 45.0
     # Phase 2: refresh Read.json after filing clear + this long OAC idle
     soi_read_refresh_idle_seconds: float = 600.0
+    # Inline Qwen3-TTS (ainet/tts_server.py on :8765)
+    tts_enabled: bool = True
+    tts_url: str = "http://127.0.0.1:8765"
+    tts_language: str = "English"
+    tts_timeout_s: float = 120.0
 
     @classmethod
     def from_env(cls) -> OllamaConfig:
@@ -61,4 +66,8 @@ class OllamaConfig:
             soi_read_refresh_idle_seconds=float(
                 os.environ.get("AINET_SOI_READ_REFRESH_IDLE_SECONDS", "600")
             ),
+            tts_enabled=os.environ.get("AINET_TTS_ENABLED", "1") not in {"0", "false", "False"},
+            tts_url=os.environ.get("AINET_TTS_URL", "http://127.0.0.1:8765").rstrip("/"),
+            tts_language=os.environ.get("AINET_TTS_LANGUAGE", "English"),
+            tts_timeout_s=float(os.environ.get("AINET_TTS_TIMEOUT", "120")),
         )

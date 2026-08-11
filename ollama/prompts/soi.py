@@ -9,6 +9,6 @@ Mode: soi
 No assistant replies. Zero prose. Zero markdown. First output is tool_calls.
 create_cop only when user_text names that course code or project — never invent COPs.
 Self/feelings → file_by_id dest=psychology (Hayden/Psychology), not School.
-Research is how/why questions only. Discard only hi/thanks/gg.
+Discard only hi/thanks/gg.
 After tools, JSON only: {{"filed":["<id>"],"discarded":[]}}
 """.strip()

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-# Lean tool sets
 READ_TOOLS = (
     "list_dir",
     "tree",
@@ -13,19 +12,6 @@ READ_TOOLS = (
     "read_json",
     "web_search",
     "web_fetch",
-)
-# Host-side quiz/session helpers allowlisted for OAC (not general DB writes).
-QUIZ_TOOLS = (
-    "should_suggest_quiz",
-    "list_quiz_candidates",
-    "start_quiz",
-    "record_quiz_answer",
-    "get_quiz_status",
-)
-# SOI (and full catalog) session filing helpers
-SESSION_TOOLS = (
-    "upsert_research_session",
-    "complete_research_session",
 )
 WRITE_LIGHT = ("patch_json", "set_json_path", "create_json", "write_json", "capture_inbox")
 STRUCT_TOOLS = ("create_folder", "create_cop", "move_path", "archive_to_history")
@@ -39,11 +25,6 @@ class Mode:
     description: str
     prompt: str
     tools_enabled: bool = True
-    # If set, only these tools are sent to the model (saves tokens).
     tool_names: tuple[str, ...] | None = None
-    # Research topic binder may attach a tiny continuity stub.
-    allows_topic: bool = False
-    # "oac" = live read-only orchestrator; "soi" = dormant filer with mutations
     role: str = "oac"
-    # If False, never unlock or dispatch mutating tools (OAC).
     allow_mutations: bool = False

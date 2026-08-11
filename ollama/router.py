@@ -15,21 +15,6 @@ class RouteDecision:
     reason: str
 
 
-_RESEARCH = re.compile(
-    r"\b("
-    r"how does|how do|what does|what is|what'?s|what are|why does|why do|"
-    r"is this|does the|mechanism|explain (in )?(depth|detail)|deep dive|rabbit hole|"
-    r"derive|proof|theorem|quantum|black hole|synthase|mitochondr|neuron|enzyme|"
-    r"history of|discovered|evidence for|why does|walk me through the|"
-    r"under the hood|fundamentals of|"
-    # learning / anatomy / science Q&A (spoken companion often uses these)
-    r"learn(ing)? about|teach me|other than the|what other|what'?s the difference|"
-    r"muscle|muscles|anatomy|physiology|forearm|neuron|cell|protein|chemistry|"
-    r"physics|biology|math|calculus|flexor|extensor|brachioradialis|"
-    r"quiz me|test my knowledge"
-    r")\b",
-    re.I,
-)
 _PLANNER = re.compile(
     r"\b("
     r"plan my|schedule|next actions?|to-?do|this week|agenda|prioritiz|"
@@ -61,15 +46,14 @@ def suggest_mode(user_text: str, current_mode_id: str) -> RouteDecision:
     if not text:
         return RouteDecision(current_mode_id, 0.0, "empty")
 
-    # Explicit lock phrases
-    if re.search(r"\b(stay in|keep|switch to) (companion|conversation|research|planner)\b", text, re.I):
-        m = re.search(r"\b(companion|conversation|research|planner)\b", text, re.I)
+    if re.search(r"\b(stay in|keep|switch to) (companion|conversation|planner)\b", text, re.I):
+        m = re.search(r"\b(companion|conversation|planner)\b", text, re.I)
         if m:
             return RouteDecision(m.group(1).lower(), 0.99, "explicit request")
 
-    # Sticky deep modes: short follow-ups should not bounce to companion
-    if current_mode_id in {"research", "conversation", "planner"} and (
-        _CONTINUE.match(text) or (len(text) < 60 and not _PLANNER.search(text) and not re.match(r"^\s*(hi|hey|hello)\b", text, re.I))
+    if current_mode_id in {"conversation", "planner"} and (
+        _CONTINUE.match(text)
+        or (len(text) < 60 and not _PLANNER.search(text) and not re.match(r"^\s*(hi|hey|hello)\b", text, re.I))
     ):
         return RouteDecision(current_mode_id, 0.7, "sticky follow-up")
 
@@ -79,14 +63,10 @@ def suggest_mode(user_text: str, current_mode_id: str) -> RouteDecision:
     if _PLANNER.search(text):
         return RouteDecision("planner", 0.8, "planning language")
 
-    if _RESEARCH.search(text) or ("?" in text and len(text) > 18):
-        conf = 0.85 if _RESEARCH.search(text) else 0.72
-        return RouteDecision("research", conf, "deep-explain / learning question")
-
     if _CONVERSATION.search(text):
         return RouteDecision("conversation", 0.75, "personal dialogue cues")
 
-    if current_mode_id in {"research", "conversation", "planner"} and len(text) > 20:
+    if current_mode_id in {"conversation", "planner"} and len(text) > 20:
         return RouteDecision(current_mode_id, 0.4, "sticky follow-up")
 
     return RouteDecision(current_mode_id or DEFAULT_MODE_ID, 0.2, "default stay")

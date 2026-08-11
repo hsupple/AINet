@@ -50,8 +50,6 @@ _EXTRA_MUTATING = frozenset(
     {
         "mark_read_stale",
         "mark_read_refreshed",
-        "start_quiz",
-        "record_quiz_answer",
     }
 )
 _ALL_MUTATING = _MUTATING | _EXTRA_MUTATING
@@ -193,7 +191,7 @@ def reopen_inbox_captures(root: Path) -> list[dict[str, Any]]:
 def harness_conversations() -> list[dict[str, Any]]:
     """Natural OAC-style turns covering a range of filing targets (Changelog shape only)."""
     return [
-        # Continue nuclear research thread
+        # Continue nuclear thread
         {
             "user_text": "ok so the water is both coolant and moderator?",
             "assistant_text": (
@@ -202,7 +200,7 @@ def harness_conversations() -> list[dict[str, Any]]:
                 "efficient. Different designs can separate those roles, but PWR/BWR style "
                 "plants lean on that dual use."
             ),
-            "mode_id": "research",
+            "mode_id": "companion",
             "topic": None,
         },
         {
@@ -212,10 +210,10 @@ def harness_conversations() -> list[dict[str, Any]]:
                 "storage. The pellets stay inside the cladding; fission products are trapped "
                 "in the ceramic until reprocessing or long-term disposal."
             ),
-            "mode_id": "research",
+            "mode_id": "companion",
             "topic": None,
         },
-        # Preferences / places / food (NOT research)
+        # Preferences / places / food
         {
             "user_text": "cool cool. also that campus coffee shop table with the outlets still slaps",
             "assistant_text": (
@@ -295,7 +293,7 @@ def harness_conversations() -> list[dict[str, Any]]:
             "mode_id": "companion",
             "topic": None,
         },
-        # Content-based research (companion mode, should still file as research)
+        # Content-based how/why (companion) — general/School, not Research
         {
             "user_text": "wait quick aside — what other muscles stabilize the wrist in a reverse curl?",
             "assistant_text": (
@@ -306,7 +304,7 @@ def harness_conversations() -> list[dict[str, Any]]:
             "mode_id": "companion",
             "topic": None,
         },
-        # Research with explicit topic
+        # How/why with leftover topic field
         {
             "user_text": "how does the proton gradient actually drive ATP synthase?",
             "assistant_text": (
@@ -314,7 +312,7 @@ def harness_conversations() -> list[dict[str, Any]]:
                 "energy turns the rotor; that mechanical rotation drives ADP + Pi → ATP "
                 "in the catalytic head. Chemiosmosis."
             ),
-            "mode_id": "research",
+            "mode_id": "companion",
             "topic": "Mitochondria",
         },
         # Household
@@ -511,14 +509,11 @@ def install_harness(
 
     # Host safety nets that write outside the tool loop.
     import ainet.tools.changelog as changelog_mod
-    import ollama.research_sessions as sessions_mod
     import ollama.soi_worker as worker_mod
 
     orig_mark = changelog_mod.mark_soi_status
-    orig_host = worker_mod.SOIWorker._host_file_research_turns
     orig_merge = worker_mod.SOIWorker._merge_state
     orig_cursor = worker_mod.SOIWorker._save_cursor
-    orig_upsert = sessions_mod.upsert_research_session
 
     def mark_wrapper(paths, *, entry_ids, status, dest_by_id=None, **_kw):  # type: ignore[no-untyped-def]
         if dry_run:
@@ -546,25 +541,6 @@ def install_harness(
         )
         return count
 
-    def host_research_wrapper(self, batch):  # type: ignore[no-untyped-def]
-        if dry_run:
-            hinted = [
-                e.get("id")
-                for e in batch
-                if isinstance(e, dict) and e.get("suggested_filing") == "research"
-            ]
-            result = {"ok": True, "dry_run": True, "would_host_file": hinted}
-            trace.record("host._host_file_research_turns", {"count": len(batch)}, result, blocked=True)
-            return []
-        created = orig_host(self, batch)
-        trace.record(
-            "host._host_file_research_turns",
-            {"count": len(batch)},
-            {"ok": True, "created": created},
-            blocked=False,
-        )
-        return created
-
     def merge_wrapper(self, patch):  # type: ignore[no-untyped-def]
         if dry_run:
             trace.record("host._merge_state", patch, {"ok": True, "dry_run": True}, blocked=True)
@@ -583,15 +559,12 @@ def install_harness(
         return orig_cursor(self, last_index)
 
     changelog_mod.mark_soi_status = mark_wrapper  # type: ignore[assignment]
-    worker_mod.SOIWorker._host_file_research_turns = host_research_wrapper  # type: ignore[method-assign]
     worker_mod.SOIWorker._merge_state = merge_wrapper  # type: ignore[method-assign]
     worker_mod.SOIWorker._save_cursor = cursor_wrapper  # type: ignore[method-assign]
 
     restores.append(lambda: setattr(changelog_mod, "mark_soi_status", orig_mark))
-    restores.append(lambda: setattr(worker_mod.SOIWorker, "_host_file_research_turns", orig_host))
     restores.append(lambda: setattr(worker_mod.SOIWorker, "_merge_state", orig_merge))
     restores.append(lambda: setattr(worker_mod.SOIWorker, "_save_cursor", orig_cursor))
-    restores.append(lambda: setattr(sessions_mod, "upsert_research_session", orig_upsert))
 
     if session_ask_hook:
         session_ask_hook()

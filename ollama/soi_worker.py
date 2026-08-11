@@ -16,23 +16,14 @@ from ainet.tools.registry import dispatch
 from ollama.client import OllamaClient, OllamaError
 from ollama.config import OllamaConfig
 from ollama.modes import get_mode
-from ollama.research_sessions import INDEX_PATH, upsert_research_session
 from ollama.content_filing import (
-    content_kind,
     cop_name_in_text,
     entry_kind,
     is_ephemeral_text,
-    topic_title_from_text,
 )
-from ollama.session import ChatSession, _guess_topic_title
+from ollama.session import ChatSession
 from ollama.soi_log import SOILogger
-from ollama.topics import (
-    ensure_topic,
-    latest_open_research_subject,
-    record_personal_filing,
-    record_topic_filing,
-    slugify_topic,
-)
+from ollama.topics import record_personal_filing
 
 _FILING_BATCH_SIZE = 4
 _SOI_MIN_TOOL_ROUNDS = 6
@@ -145,7 +136,6 @@ class SOIWorker:
             "marked_discarded": 0,
             "left_pending": 0,
             "seen_inbox": 0,
-            "host_research_sessions": [],
             "mutating_tool_calls": 0,
             "batches": 0,
             "retries": 0,
@@ -176,7 +166,6 @@ class SOIWorker:
             totals["seen_inbox"] += int(result.get("seen_inbox") or 0)
             totals["mutating_tool_calls"] += int(result.get("mutating_tool_calls") or 0)
             totals["retries"] += int(result.get("retries") or 0)
-            totals["host_research_sessions"].extend(result.get("host_research_sessions") or [])
             if result.get("reply"):
                 totals["replies"].append(str(result["reply"])[:400])
             # If nothing was resolved and no tools ran, stop to avoid infinite loops.
@@ -208,7 +197,6 @@ class SOIWorker:
                 "batches": totals["batches"],
                 "needs_read_refresh": True if totals["marked_filed"] else self.needs_read_refresh(),
                 "last_filing_at": _utc_now(),
-                "host_research_sessions": totals["host_research_sessions"],
                 "reply_preview": (totals["replies"][-1] if totals["replies"] else "")[:400],
                 "errors": errors or None,
             }
@@ -225,7 +213,6 @@ class SOIWorker:
             "mutating_tool_calls": totals["mutating_tool_calls"],
             "batches": totals["batches"],
             "retries": totals["retries"],
-            "host_research_sessions": totals["host_research_sessions"],
             "pending_remaining": len(self.pending_changelog()),
             "inbox_remaining": len(self.pending_inbox()),
             "replies": totals["replies"],
@@ -356,7 +343,7 @@ class SOIWorker:
                 eid = str(entry.get("id") or "")
                 if not eid or eid in handled_by_id or eid in discarded_ids:
                     continue
-                if entry.get("suggested_filing") in {"research", "discard"}:
+                if entry.get("suggested_filing") == "discard":
                     continue
                 text = _entry_user_text(entry)
                 if ("/Courses/" in path or "/Projects/" in path) and not cop_name_in_text(
@@ -399,12 +386,6 @@ class SOIWorker:
         leftover = [
             e for e in batch_changelog if str(e.get("id") or "") not in handled_by_id
         ]
-        host_research = self._host_file_research_turns(leftover)
-        if isinstance(host_research, dict):
-            host_sessions = list(host_research.get("sessions") or [])
-            dest_by_id.update(host_research.get("dest_by_id") or {})
-        else:
-            host_sessions = list(host_research or [])
         host_general = self._host_file_general_turns(leftover)
         dest_by_id.update(host_general.get("dest_by_id") or {})
         host_personal = self._host_file_personal_turns(leftover)
@@ -430,11 +411,7 @@ class SOIWorker:
                 continue
             if eid in discarded_ids:
                 continue
-            in_session = self._already_in_research_session(eid)
-            if in_session or eid in host_filed_ids or eid in handled_by_id:
-                filed_ids.append(eid)
-                continue
-            if entry.get("suggested_filing") == "research" and self._already_in_research_session(eid):
+            if eid in host_filed_ids or eid in handled_by_id:
                 filed_ids.append(eid)
                 continue
             left_pending.append(eid)
@@ -462,7 +439,6 @@ class SOIWorker:
             "left_pending": len(left_pending),
             "left_pending_ids": left_pending,
             "seen_inbox": len(batch_inbox),
-            "host_research_sessions": host_sessions,
             "host_general_filed": list(host_filed_ids),
             "host_inbox_filed": host_inbox.get("filed") or 0,
             "narrated_tools_applied": len(narrated),
@@ -625,7 +601,7 @@ class SOIWorker:
                     "known_facts/recent_changes stay a lean digest of newest relevant info. "
                     f"{size_rules} "
                     "Do not dump unrelated domains. Prefer patch_json. "
-                    "Do NOT dump read_changelog into Research Notes.json — Notes/History are filled at filing time. "
+                    "Do NOT dump read_changelog into Notes.json — Notes/History are filled at filing time. "
                     "Also observe Hayden's speech from recent Masterlog turns: curse rate, tone, "
                     "buddy greetings, how questions are asked. Patch Hayden/Identity/Voice.json and "
                     "Personality.json with evidence only (no invented traits). "
@@ -776,107 +752,6 @@ class SOIWorker:
             self.log.log("model_error", level="error", phase=phase, error=str(exc))
             return None, str(exc), stats
 
-    def _already_in_research_session(self, entry_id: str) -> bool:
-        if not entry_id or not self.db.paths.resolve(INDEX_PATH).exists():
-            return False
-        index = self.db.read_json(INDEX_PATH)["data"]
-        sessions = index.get("sessions") if isinstance(index, dict) else None
-        if not isinstance(sessions, list):
-            return False
-        for row in sessions:
-            if not isinstance(row, dict):
-                continue
-            path = str(row.get("path") or "")
-            if not path or not self.db.paths.resolve(path).exists():
-                continue
-            data = self.db.read_json(path)["data"]
-            ids = data.get("changelog_entry_ids") if isinstance(data, dict) else None
-            if isinstance(ids, list) and entry_id in ids:
-                return True
-        return False
-
-    def _host_file_research_turns(self, batch_changelog: list[dict[str, Any]]) -> dict[str, Any]:
-        """If SOI skipped upsert_research_session, file research-hinted turns here."""
-        created: list[str] = []
-        dest_by_id: dict[str, str] = {}
-        groups: dict[str, list[dict[str, Any]]] = {}
-        open_subject = latest_open_research_subject(self.db)
-        for entry in batch_changelog:
-            kind = entry.get("suggested_filing") or entry_kind(entry)
-            if kind != "research":
-                continue
-            if _is_ephemeral_entry(entry):
-                continue
-            user_text = _entry_user_text(entry)
-            if not user_text:
-                continue
-            eid = str(entry.get("id") or "")
-            if eid and self._already_in_research_session(eid):
-                continue
-            title = topic_title_from_text(user_text) or _guess_topic_title(user_text)
-            if (not title or content_kind(user_text) == "research") and open_subject:
-                if not title or len(user_text) < 80:
-                    title = open_subject
-            if not title:
-                continue
-            groups.setdefault(title, []).append(entry)
-            open_subject = title
-
-        for title, entries in groups.items():
-            ensure_topic(self.db, title)
-            slug = slugify_topic(title)
-            details_covered: list[dict[str, str]] = []
-            entry_ids: list[str] = []
-            for entry in entries:
-                details = entry.get("details") if isinstance(entry.get("details"), dict) else {}
-                user_text = _entry_user_text(entry)
-                assistant_text = str(details.get("assistant_text") or "").strip()
-                eid = str(entry.get("id") or "")
-                if eid:
-                    entry_ids.append(eid)
-                if user_text:
-                    details_covered.append({"kind": "qa", "text": f"Q: {user_text}"})
-                if assistant_text:
-                    clip = assistant_text if len(assistant_text) <= 900 else assistant_text[:900] + "…"
-                    details_covered.append({"kind": "mechanism", "text": clip})
-            result = upsert_research_session(
-                self.db,
-                subject=title,
-                title=title,
-                topic_slug=slug,
-                details_covered=details_covered,
-                length_turns=len(entries),
-                changelog_entry_ids=entry_ids,
-                status="open",
-                summary=f"Host-filed research session for {title}",
-            )
-            if result.get("ok") is False:
-                continue
-            session_obj = result.get("session") if isinstance(result.get("session"), dict) else {}
-            sid = str(
-                result.get("session_id")
-                or result.get("id")
-                or session_obj.get("id")
-                or ""
-            )
-            if sid:
-                created.append(sid)
-            session_path = str(result.get("path") or "")
-            for eid in entry_ids:
-                if eid:
-                    dest_by_id[eid] = session_path or f"Hayden/Research/Sessions/{sid}.json"
-            for entry in entries:
-                details = entry.get("details") if isinstance(entry.get("details"), dict) else {}
-                record_topic_filing(
-                    self.db,
-                    slug,
-                    title,
-                    user=_entry_user_text(entry),
-                    assistant=str(details.get("assistant_text") or ""),
-                    entry_ids=[str(entry.get("id") or "")] if entry.get("id") else [],
-                )
-        return {"sessions": created, "dest_by_id": dest_by_id}
-
     def _execute_narrated_tool_plan(self, reply: str) -> list[dict[str, Any]]:
         """Disabled: models echo changelog rows as fake upsert JSON and loop."""
         return []
@@ -913,8 +788,6 @@ class SOIWorker:
             "create_folder",
             "create_cop",
             "capture_inbox",
-            "upsert_research_session",
-            "complete_research_session",
             "mark_read_stale",
             "mark_read_refreshed",
         }
@@ -931,7 +804,7 @@ class SOIWorker:
             if isinstance(path, str) and path and not path.startswith(
                 ("Hayden/", "School/", "Work/", "Household/", "runtime/")
             ):
-                if path.startswith(("Preferences/", "Habits/", "Inbox/", "Research/", "Relationships/")):
+                if path.startswith(("Preferences/", "Habits/", "Inbox/", "Relationships/")):
                     args = {**args, "path": f"Hayden/{path}"}
             try:
                 result = dispatch(self.db, name, args)
@@ -969,12 +842,12 @@ class SOIWorker:
         return True
 
     def _host_file_general_turns(self, batch_changelog: list[dict[str, Any]]) -> dict[str, Any]:
-        """Deterministic leaf filing when SOI skips non-research lasting turns."""
+        """Deterministic leaf filing when SOI skips lasting turns."""
         filed_ids: list[str] = []
         actions: list[str] = []
         dest_by_id: dict[str, str] = {}
         for entry in batch_changelog:
-            if entry.get("suggested_filing") in {"research", "discard"}:
+            if entry.get("suggested_filing") == "discard":
                 continue
             if _is_ephemeral_entry(entry):
                 continue
@@ -1142,7 +1015,7 @@ class SOIWorker:
         return {"filed_ids": filed_ids, "actions": actions, "dest_by_id": dest_by_id}
 
     def _host_file_personal_turns(self, batch_changelog: list[dict[str, Any]]) -> dict[str, Any]:
-        """Identity / psychology / habits / voice — same id-copy path as research."""
+        """Identity / psychology / habits / voice."""
         filed_ids: list[str] = []
         dest_by_id: dict[str, str] = {}
         for entry in batch_changelog:

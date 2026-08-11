@@ -13,16 +13,7 @@ from ainet.tools.web import web_fetch, web_search
 READ_TOOL_NAMES = frozenset(
     {"list_dir", "tree", "read_text", "read_json", "web_search", "web_fetch"}
 )
-QUIZ_TOOL_NAMES = frozenset(
-    {
-        "should_suggest_quiz",
-        "list_quiz_candidates",
-        "start_quiz",
-        "record_quiz_answer",
-        "get_quiz_status",
-    }
-)
-OAC_TOOL_NAMES = READ_TOOL_NAMES | QUIZ_TOOL_NAMES
+OAC_TOOL_NAMES = READ_TOOL_NAMES
 
 
 
@@ -403,10 +394,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "get_tools",
             "description": (
-                "List the AINet tool catalog (DB ops + web_search/web_fetch + quiz helpers). "
+                "List the AINet tool catalog (DB ops + web_search/web_fetch). "
                 "Call this when you need a tool that is not in your current lean set; "
                 "after calling, the full catalog is unlocked for later tool calls "
-                "(OAC stays read-only + web + allowlisted quiz tools)."
+                "(OAC stays read-only + web)."
             ),
             "parameters": {
                 "type": "object",
@@ -423,121 +414,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "should_suggest_quiz",
-            "description": (
-                "Heuristic: whether OAC may casually suggest a short research quiz now. "
-                "Anti-spam — occasional only (turn/time gaps). Call before suggesting; "
-                "never suggest every message."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "turn_count": {
-                        "type": "integer",
-                        "description": "Optional approximate turns in this chat.",
-                    }
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_quiz_candidates",
-            "description": (
-                "Rank research sessions for quizzing: prefer recent sessions and low "
-                "memory scores / previously wrong items. Returns sample details_covered."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "default": 12},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "start_quiz",
-            "description": (
-                "Start a quiz loop after Hayden confirms. Pass drafted questions "
-                "(prompt + expected_answer + session_id) or omit to auto-seed from "
-                "ranked research session details. Active state lives under runtime/oac/."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "questions": {
-                        "type": "array",
-                        "description": (
-                            "Optional drafted questions: "
-                            "{prompt, expected_answer, session_id?, topic_slug?}"
-                        ),
-                        "items": {"type": "object"},
-                    },
-                    "count": {"type": "integer", "default": 5},
-                    "session_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional restrict auto-seed to these session ids.",
-                    },
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "record_quiz_answer",
-            "description": (
-                "After grading Hayden's answer conversationally: record correct/incorrect, "
-                "persist memory scores under Hayden/Research/Scores.json, advance to next "
-                "question (or complete the quiz)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "user_answer": {"type": "string"},
-                    "correct": {"type": "boolean"},
-                    "brief_correction": {
-                        "type": "string",
-                        "description": "Short correction/teach note if wrong.",
-                    },
-                    "question_id": {
-                        "type": "string",
-                        "description": "Optional; defaults to current question.",
-                    },
-                },
-                "required": ["user_answer", "correct"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_quiz_status",
-            "description": "Get active/idle/completed quiz state and current question.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reveal_answer": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "If true, include expected_answer for grading.",
-                    }
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "file_by_id",
             "description": (
                 "SOI preferred filing tool. Pass Changelog entry_id(s) or Inbox inbox_id only — "
                 "the host copies stored user_text. Do NOT paste turn bodies. "
-                "dest: 'research' | 'identity' | 'voice' | 'psychology' | 'habits' | "
+                "dest: 'identity' | 'voice' | 'psychology' | 'habits' | "
                 "'discard' | a leaf path like Hayden/Preferences/Food.json. File by content, not mode."
             ),
             "parameters": {
@@ -554,7 +435,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "entry_ids": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Several related Changelog ids (one research rabbit hole)",
+                        "description": "Several related Changelog ids",
                     },
                     "inbox_id": {
                         "type": "string",
@@ -563,91 +444,14 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "dest": {
                         "type": "string",
                         "description": (
-                            "'research' | 'identity' | 'voice' | 'psychology' | 'habits' | "
+                            "'identity' | 'voice' | 'psychology' | 'habits' | "
                             "'discard' (greetings only) | or a Folderrules JSON leaf. "
                             "Not Inbox. Not a dump for schedules/courses."
                         ),
                     },
-                    "subject": {
-                        "type": "string",
-                        "description": "Research subject when dest=research (optional)",
-                    },
-                    "topic_slug": {"type": "string"},
                     "summary": {"type": "string"},
                 },
                 "required": ["dest"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "upsert_research_session",
-            "description": (
-                "SOI: create/update a Hayden/Research/Sessions/<Id>.json entity. "
-                "Prefer file_by_id(dest='research', entry_ids=[...]). If you use this, "
-                "pass changelog_entry_ids only — host fills details_covered from Changelog. "
-                "Do not paste full turn text."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "session_id": {
-                        "type": "string",
-                        "description": "Omit to allocate a new id.",
-                    },
-                    "subject": {"type": "string"},
-                    "title": {"type": "string"},
-                    "topic_slug": {"type": "string"},
-                    "topic_path": {"type": "string"},
-                    "details_covered": {
-                        "type": "array",
-                        "description": (
-                            "Structured points/mechanisms/QAs: "
-                            "{kind, text, question?, answer?, tags?}"
-                        ),
-                        "items": {},
-                    },
-                    "append_details": {"type": "boolean", "default": True},
-                    "length_turns": {"type": "integer"},
-                    "started_at": {"type": "string"},
-                    "related_topic": {"type": "string"},
-                    "source_session_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "changelog_entry_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "notes": {"type": "string"},
-                    "status": {"type": "string", "enum": ["open", "complete"]},
-                    "summary": {"type": "string"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "complete_research_session",
-            "description": (
-                "Mark a research session complete: set ended_at, duration_seconds, status=complete. "
-                "Call when research mode ends or the rabbit hole clearly wraps up."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "session_id": {"type": "string"},
-                    "ended_at": {"type": "string"},
-                    "details_covered": {
-                        "type": "array",
-                        "items": {},
-                    },
-                    "length_turns": {"type": "integer"},
-                    "summary": {"type": "string"},
-                },
-                "required": ["session_id"],
             },
         },
     },
@@ -662,7 +466,7 @@ def catalog_tools(
 ) -> dict[str, Any]:
     """Return the tool catalog.
 
-    read_only=True → OAC view (list/tree/read + web + quiz helpers).
+    read_only=True → OAC view (list/tree/read + web).
     Otherwise → all operational tools (excludes get_tools unless include_meta).
     """
     tools = []
@@ -687,7 +491,7 @@ def catalog_tools(
         "tools": tools,
         "unlocks_full_access": not read_only,
         "note": (
-            "OAC catalog: read + web + allowlisted quiz tools (no general DB writes)."
+            "OAC catalog: read + web (no general DB writes)."
             if read_only
             else "Full tool access unlocked for subsequent calls this session."
         ),
@@ -705,8 +509,6 @@ def tools_subset(names: tuple[str, ...] | list[str] | None = None) -> list[dict[
 
 def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
     from ollama import file_by_id as file_by_id_mod
-    from ollama import quiz as quiz_mod
-    from ollama import research_sessions as sessions_mod
 
     return {
         "list_dir": lambda **kw: db.list_dir(kw.get("path", ".")),
@@ -768,65 +570,12 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
             kw["url"],
             max_chars=int(kw.get("max_chars", 4000)),
         ),
-        "should_suggest_quiz": lambda **kw: quiz_mod.should_suggest_quiz(
-            db,
-            turn_count=kw.get("turn_count"),
-        ),
-        "list_quiz_candidates": lambda **kw: quiz_mod.list_quiz_candidates(
-            db,
-            limit=int(kw.get("limit", 12)),
-        ),
-        "start_quiz": lambda **kw: quiz_mod.start_quiz(
-            db,
-            questions=kw.get("questions"),
-            count=int(kw.get("count", 5)),
-            session_ids=kw.get("session_ids"),
-        ),
-        "record_quiz_answer": lambda **kw: quiz_mod.record_quiz_answer(
-            db,
-            user_answer=str(kw.get("user_answer") or ""),
-            correct=bool(kw["correct"]),
-            brief_correction=str(kw.get("brief_correction") or ""),
-            question_id=kw.get("question_id"),
-        ),
-        "get_quiz_status": lambda **kw: quiz_mod.get_quiz_status(
-            db,
-            reveal_answer=bool(kw.get("reveal_answer", False)),
-        ),
         "file_by_id": lambda **kw: file_by_id_mod.file_by_id(
             db,
             entry_id=str(kw.get("entry_id") or kw.get("id") or ""),
             entry_ids=kw.get("entry_ids"),
             inbox_id=str(kw.get("inbox_id") or ""),
             dest=str(kw.get("dest") or ""),
-            subject=str(kw.get("subject") or ""),
-            topic_slug=str(kw.get("topic_slug") or ""),
-            summary=kw.get("summary"),
-        ),
-        "upsert_research_session": lambda **kw: sessions_mod.upsert_research_session(
-            db,
-            session_id=kw.get("session_id"),
-            subject=str(kw.get("subject") or ""),
-            title=str(kw.get("title") or ""),
-            topic_slug=str(kw.get("topic_slug") or ""),
-            topic_path=str(kw.get("topic_path") or ""),
-            details_covered=kw.get("details_covered"),
-            append_details=bool(kw.get("append_details", True)),
-            length_turns=kw.get("length_turns"),
-            started_at=kw.get("started_at"),
-            related_topic=str(kw.get("related_topic") or ""),
-            source_session_ids=kw.get("source_session_ids"),
-            changelog_entry_ids=kw.get("changelog_entry_ids"),
-            notes=str(kw.get("notes") or ""),
-            status=kw.get("status"),
-            summary=kw.get("summary"),
-        ),
-        "complete_research_session": lambda **kw: sessions_mod.complete_research_session(
-            db,
-            str(kw["session_id"]),
-            ended_at=kw.get("ended_at"),
-            details_covered=kw.get("details_covered"),
-            length_turns=kw.get("length_turns"),
             summary=kw.get("summary"),
         ),
         "get_tools": lambda **kw: catalog_tools(
