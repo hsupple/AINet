@@ -157,6 +157,12 @@ def make_handler(app: SOITestApp):
                 self._send(code, body, ctype)
                 return
 
+            if path == "/api/run_p2":
+                status, body, ctype = _json_bytes(app.run_read_refresh())
+                code = 200 if body and b'"ok":true' in body.replace(b" ", b"") else 400
+                self._send(code, body, ctype)
+                return
+
             self._send(404, b'{"ok":false,"error":"not found"}', "application/json")
 
     return Handler

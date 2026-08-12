@@ -11,6 +11,7 @@ _MODES: dict[str, Mode] = {
     planner.MODE.id: planner.MODE,
     soi.MODE.id: soi.MODE,
     soi_test.MODE.id: soi_test.MODE,
+    soi_test.MODE_P2.id: soi_test.MODE_P2,
     "dormant": dormant.MODE,
 }
 

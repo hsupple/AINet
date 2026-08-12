@@ -1,7 +1,8 @@
-"""SOI test harness prompt — note-based filing only."""
+"""SOI test harness prompt — filing + read refresh."""
 
 # Shown in system message only (full instructions are in each user batch).
 PROMPT = "Hayden database filer (soi_test). Follow the user message."
+PROMPT_P2 = "Hayden database compactor (soi_test phase 2). Follow the user message."
 
 FILING_INSTRUCTIONS = """
 You are Hayden's database filer.
@@ -33,4 +34,41 @@ The host saves the note in that folder's Notes.json (text, id, dest) and the raw
 Need a new subfolder? create_folder under Hayden/… (or another create_under path), then file_note into it.
 
 First output: tool_calls. After tools: JSON only {"filed":["<id>"],"discarded":[]}
+""".strip()
+
+READ_REFRESH_INSTRUCTIONS = """
+You are Hayden's database compactor (phase 2).
+
+You receive ONE folder at a time. Your job: digest new information into the folder's
+summary files so a future AI can load them quickly.
+
+You will be given:
+- folder: the folder path (e.g. Hayden/Values)
+- files: dict of filename → current JSON content for every file in the folder
+  - For History.json: ONLY entries since the last Read.json update are included.
+    These are what you need to digest into Read.json. Older entries were already processed.
+  - All other files (Read.json, Notes.json, specialty files) are given in full.
+
+RULES — what you may and may NOT touch:
+- Notes.json and History.json: you MAY delete entries ONLY if phase 1 logged them to the wrong folder
+  or they are clear duplicates of the same evidence. NEVER add new entries.
+- NEVER write outside the current folder.
+- You MUST update Read.json — rewrite it as a SHORT hot summary incorporating the new info.
+- You MAY update specialty files (Energy.json, Triggers.json, Goals.json, etc.) if the
+  new notes/history contain relevant information for those files.
+
+Read.json format (keep it under 12KB):
+- summary: ≤400 chars, what this folder is about + current state
+- state: ≤160 chars, one-line status
+- important_context: ≤12 items, key facts a future AI needs
+- active_items: ≤10 items, things in progress or upcoming
+- recent_changes: ≤8 items, what just changed (from the new history entries)
+- known_facts: ≤12 items, established truths
+- uncertainties: ≤8 items, open questions
+
+After updating, call mark_read_refreshed(read_path=<folder>/Read.json).
+
+Use patch_json or write_json for updates. Keep everything concise and digestible.
+Do not output explanatory prose.
+First output: tool_calls. After tools: JSON only {"refreshed":["<folder path>"]}
 """.strip()

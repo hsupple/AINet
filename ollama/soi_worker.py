@@ -22,8 +22,13 @@ from ollama.content_filing import (
     is_ephemeral_text,
 )
 from ollama.dest_resolver import build_file_structure, list_dest_labels
-from ollama.filing_payload import build_test_filing_payload, format_test_user_message
-from ollama.prompts.soi_test import FILING_INSTRUCTIONS
+from ollama.filing_payload import (
+    build_read_refresh_folders,
+    build_test_filing_payload,
+    format_read_refresh_message,
+    format_test_user_message,
+)
+from ollama.prompts.soi_test import FILING_INSTRUCTIONS, READ_REFRESH_INSTRUCTIONS
 from ollama.session import ChatSession
 from ollama.soi_log import SOILogger
 from ollama.topics import record_personal_filing
@@ -573,71 +578,115 @@ class SOIWorker:
                 "reason": "no stale Reads (needs_update=false)",
             }
 
-        grouped = self.reads_by_domain(stale)
+        folder_payloads = build_read_refresh_folders(self.db)
+        if not folder_payloads:
+            self._merge_state(
+                {
+                    "status": "idle",
+                    "phase": "read_refresh",
+                    "needs_read_refresh": False,
+                    "reason": "no stale folders",
+                }
+            )
+            self.log.log("read_refresh_skip", reason="no stale folders")
+            return {
+                "ok": True,
+                "ran": False,
+                "phase": "read_refresh",
+                "reason": "no stale folders",
+            }
+
+        domains = sorted({str(fp.get("folder") or "").split("/", 1)[0] for fp in folder_payloads if fp.get("folder")})
         self.log.log(
             "read_refresh_start",
             stale_count=len(stale),
-            domains=list(grouped.keys()),
+            domains=domains,
             stale=stale,
         )
         replies: dict[str, str] = {}
         errors: dict[str, str] = {}
         refreshed: list[str] = []
 
-        size_rules = (
-            "Read.json is a SHORT hot index only — never a folder dump. "
-            "Caps: summary≤400 chars, state≤160, items≤180 chars each; "
-            "important_context≤12, active_items≤10, recent_changes≤8, "
-            "known_facts≤12, uncertainties≤8; whole file ≤~12KB. "
-            "Prefer path pointers to sibling leaves over inlining detail. "
-            "Roll excess into the correct leaf files or History before/while refreshing. "
-            "Use pending read_changelog entries as the change digest."
-        )
+        for fp in folder_payloads:
+            folder = str(fp.get("folder") or "").strip()
+            if not folder:
+                continue
+            read_path = f"{folder}/Read.json"
+            notes_path = f"{folder}/Notes.json"
+            hist_path = f"{folder}/History.json"
+            new_entries = int(fp.get("new_entries_since_last_refresh") or 0)
+            domain = folder.split("/", 1)[0]
 
-        for domain, reads in grouped.items():
-            payload = {
-                "phase": "read_refresh",
-                "domain": domain,
-                "read_paths": reads,
-                "instructions": (
-                    "You are SOI Phase 2 (Read refresh). "
-                    "ONLY the listed Read.json paths need updates (needs_update=true / pending read_changelog). "
-                    "For each, inspect that COP's hot surface and nearby Profile/Plan/History/Notes only as needed. "
-                    "Rewrite/patch the Read so summary/state/important_context/active_items/"
-                    "known_facts/recent_changes stay a lean digest of newest relevant info. "
-                    f"{size_rules} "
-                    "Do not dump unrelated domains. Prefer patch_json. "
-                    "Do NOT dump read_changelog into Notes.json — Notes/History are filled at filing time. "
-                    "Read Notes.json and History.json in the same folder, then update Read.json (hot index) "
-                    "and Schedule.json (due dates/deadlines from notes). "
-                    "Also observe Hayden's speech from recent Masterlog turns: curse rate, tone, "
-                    "buddy greetings, how questions are asked. Patch Hayden/Identity/Voice.json and "
-                    "Personality.json with evidence only (no invented traits). "
-                    "After each successful Read rewrite, call mark_read_refreshed on that Read path "
-                    "(or folder) so needs_update=false and pending changelog entries are consumed."
-                ),
-            }
-            reply, err, _stats = self._ask_soi(payload)
+            try:
+                before_read = self.db.read_json(read_path)["data"]
+            except (OSError, ValueError, KeyError):
+                before_read = {}
+            try:
+                before_notes = self.db.read_json(notes_path)["data"]
+            except (OSError, ValueError, KeyError):
+                before_notes = None
+            try:
+                before_hist = self.db.read_json(hist_path)["data"]
+            except (OSError, ValueError, KeyError):
+                before_hist = None
+
+            payload = {**fp, "phase": "read_refresh", "domain": domain}
+            reply, err, stats = self._ask_soi(payload)
             if err:
-                errors[domain] = err
-            else:
-                replies[domain] = (reply or "")[:400]
-                # Host safety net: clear gate for paths still marked stale after a successful run.
-                for rel in reads:
-                    try:
-                        still = self.db.read_json(rel)["data"]
-                    except (OSError, ValueError, KeyError):
-                        continue
-                    if readlog.read_needs_refresh(still):
-                        try:
-                            self.db.mark_read_refreshed(rel)
-                            refreshed.append(rel)
-                        except (OSError, ValueError) as exc:
-                            errors[domain] = (
-                                (errors.get(domain) or "") + f" mark_read_refreshed({rel}): {exc}"
-                            ).strip()
-                    else:
-                        refreshed.append(rel)
+                errors[folder] = err
+                continue
+
+            replies[folder] = (reply or "")[:400]
+            mut_count = len(stats.get("mutating_calls") or [])
+            if mut_count == 0:
+                errors[folder] = "model produced no mutating tool calls"
+                continue
+
+            try:
+                after_read = self.db.read_json(read_path)["data"]
+            except (OSError, ValueError, KeyError):
+                after_read = {}
+            try:
+                after_notes = self.db.read_json(notes_path)["data"]
+            except (OSError, ValueError, KeyError):
+                after_notes = None
+            try:
+                after_hist = self.db.read_json(hist_path)["data"]
+            except (OSError, ValueError, KeyError):
+                after_hist = None
+
+            digest_keys = (
+                "summary",
+                "state",
+                "important_context",
+                "recent_changes",
+                "active_items",
+                "known_facts",
+                "uncertainties",
+            )
+            digest_changed = any(
+                (before_read.get(k) if isinstance(before_read, dict) else None)
+                != (after_read.get(k) if isinstance(after_read, dict) else None)
+                for k in digest_keys
+            )
+            notes_changed = before_notes != after_notes
+            hist_changed = before_hist != after_hist
+            cleanup_changed = notes_changed or hist_changed
+
+            if new_entries > 0 and not (digest_changed or cleanup_changed):
+                errors[folder] = (
+                    "no Read digest update detected despite new entries; "
+                    "mark_read_refreshed-only run rejected"
+                )
+                continue
+
+            try:
+                still = self.db.read_json(read_path)["data"]
+                if readlog.read_needs_refresh(still):
+                    self.db.mark_read_refreshed(read_path)
+            except (OSError, ValueError, KeyError):
+                pass
+            refreshed.append(read_path)
 
         self._host_observe_voice_from_masterlog()
 
@@ -649,7 +698,7 @@ class SOIWorker:
                 "phase": "read_refresh",
                 "needs_read_refresh": bool(remaining) or bool(errors),
                 "last_read_refresh_at": _utc_now(),
-                "read_domains": list(grouped.keys()),
+                "read_domains": domains,
                 "stale_before": stale,
                 "refreshed": refreshed,
                 "stale_remaining": remaining,
@@ -661,7 +710,7 @@ class SOIWorker:
             "ok": ok,
             "ran": True,
             "phase": "read_refresh",
-            "domains": list(grouped.keys()),
+            "domains": domains,
             "stale": stale,
             "refreshed": refreshed,
             "stale_remaining": remaining,
@@ -732,6 +781,14 @@ class SOIWorker:
         try:
             if phase == "filing":
                 user_text = format_test_user_message(FILING_INSTRUCTIONS, payload)
+                reply = session.ask(
+                    user_text,
+                    stream=stream,
+                    on_thinking=None,
+                    on_tool=on_tool,
+                )
+            elif phase == "read_refresh":
+                user_text = format_read_refresh_message(READ_REFRESH_INSTRUCTIONS, payload)
                 reply = session.ask(
                     user_text,
                     stream=stream,

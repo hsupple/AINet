@@ -154,6 +154,7 @@
     <div class="toolbar">
       <button id="reset">Reset</button>
       <button class="primary" id="run">Run filing</button>
+      <button id="run_p2">Run phase 2</button>
     </div>
   </header>
 
@@ -262,6 +263,7 @@
       const state = st.running ? "running" : "idle";
       $("meta").textContent = `${state} • pending ${st.pending_count} • changes ${st.changes_count} • model ${st.model}`;
       $("run").disabled = !!st.running;
+      $("run_p2").disabled = !!st.running;
       $("reset").disabled = !!st.running;
     }
 
@@ -274,6 +276,7 @@
       if (ev.event === "soi_log") return ev.text || "";
       if (ev.event === "run_start") return `run_start ${ev.phase || ""}`;
       if (ev.event === "run_done") return `run_done ${ev.phase || ""}`;
+      if (ev.event === "read_refresh_folder") return `read_refresh ${ev.folder || ""} (${ev.new_entries ?? 0} new)`;
       if (ev.event === "run_error") return `run_error ${ev.error || ""}`;
       if (ev.event === "reset") return "reset";
       if (ev.event === "tool") return `tool ${ev.tool || ""} ${ev.ok === false ? "FAIL" : "ok"}`;
@@ -314,6 +317,11 @@
 
     $("run").onclick = async () => {
       await api("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      await refreshStatus();
+    };
+
+    $("run_p2").onclick = async () => {
+      await api("/api/run_p2", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       await refreshStatus();
     };
 

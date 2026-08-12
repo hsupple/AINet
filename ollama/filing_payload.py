@@ -1,7 +1,8 @@
-"""Build the simplified filing payload for SOI test."""
+"""Build the simplified filing payload for SOI test (phase 1 + phase 2)."""
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ainet.tools.ops import DatabaseTools
@@ -78,4 +79,91 @@ def format_test_user_message(prompt: str, payload: dict[str, Any]) -> str:
         lines.append("inbox_unfiled:")
         lines.append(json.dumps(inbox, ensure_ascii=False, indent=2))
 
+    return "\n".join(lines)
+
+
+# ---- Phase 2: read refresh payload ----------------------------------------
+
+def _read_folder_jsons(db: DatabaseTools, folder: str, last_updated: str) -> dict[str, Any]:
+    """Read every JSON in a folder. History.json is filtered to entries after last_updated."""
+    folder_path = db.paths.resolve(folder)
+    if not folder_path.is_dir():
+        return {}
+    files: dict[str, Any] = {}
+    for child in sorted(folder_path.iterdir()):
+        if not child.is_file() or child.suffix != ".json":
+            continue
+        try:
+            text = child.read_text(encoding="utf-8")
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        if child.name == "History.json" and isinstance(parsed, dict):
+            events = parsed.get("events")
+            if isinstance(events, list) and last_updated:
+                new_events = [
+                    e for e in events
+                    if isinstance(e, dict) and (e.get("timestamp") or "") > last_updated
+                ]
+                parsed = {"events": new_events}
+            files[child.name] = parsed
+        else:
+            files[child.name] = parsed
+    return files
+
+
+def build_read_refresh_folders(db: DatabaseTools) -> list[dict[str, Any]]:
+    """Find all folders with stale Read.json and build per-folder payloads."""
+    stale_result = db.list_stale_reads()
+    stale_paths: list[str] = stale_result.get("paths") or []
+
+    folders: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for read_path in stale_paths:
+        folder = read_path.rsplit("/", 1)[0] if "/" in read_path else "."
+        if folder in seen:
+            continue
+        seen.add(folder)
+
+        # Pre-read Read.json to get last_updated cutoff for History filtering
+        try:
+            read_data = db.read_json(f"{folder}/Read.json")["data"]
+        except (OSError, ValueError, KeyError):
+            read_data = {}
+        last_updated = read_data.get("last_updated") or "" if isinstance(read_data, dict) else ""
+
+        files = _read_folder_jsons(db, folder, last_updated)
+        if not files:
+            continue
+
+        history = files.get("History.json", {})
+        new_events = history.get("events", []) if isinstance(history, dict) else []
+        new_count = len(new_events) if isinstance(new_events, list) else 0
+
+        notes = files.get("Notes.json", {})
+        notes_list = notes.get("notes") if isinstance(notes, dict) else []
+        if not isinstance(notes_list, list):
+            notes_list = []
+
+        folders.append({
+            "folder": folder,
+            "files": files,
+            "new_entries_since_last_refresh": new_count,
+            "notes_count": len(notes_list),
+        })
+
+    return folders
+
+
+def format_read_refresh_message(prompt: str, folder_payload: dict[str, Any]) -> str:
+    """User message for a single folder's phase 2 compaction."""
+    lines = [prompt.strip(), ""]
+    lines.append(f"folder: {folder_payload['folder']}")
+    lines.append(f"new_entries_since_last_refresh: {folder_payload['new_entries_since_last_refresh']}")
+    lines.append(f"notes_count: {folder_payload['notes_count']}")
+    lines.append("")
+    lines.append("files:")
+    lines.append(json.dumps(folder_payload["files"], ensure_ascii=False, indent=2))
     return "\n".join(lines)

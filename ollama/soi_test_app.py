@@ -95,9 +95,19 @@ class TestSOIWorker(SOIWorker):
         from dataclasses import replace as dc_replace
 
         from ollama.client import OllamaError
-        from ollama.filing_payload import format_test_user_message
-        from ollama.prompts.soi_test import FILING_INSTRUCTIONS
+        from ollama.filing_payload import (
+            format_read_refresh_message,
+            format_test_user_message,
+        )
+        from ollama.prompts.soi_test import (
+            FILING_INSTRUCTIONS,
+            READ_REFRESH_INSTRUCTIONS,
+        )
         from ollama.soi_worker import _SOI_MAX_HISTORY, _SOI_MIN_TOOL_ROUNDS
+
+        phase = payload.get("phase") or "soi_test"
+        is_p2 = phase == "read_refresh"
+        mode_id = "soi_test_p2" if is_p2 else "soi_test"
 
         soi_config = dc_replace(
             self.config,
@@ -108,7 +118,7 @@ class TestSOIWorker(SOIWorker):
             auto_mode=False,
         )
         session = ChatSession(
-            mode=get_mode("soi_test"),
+            mode=get_mode(mode_id),
             config=soi_config,
             client=self.client,
             auto_mode=False,
@@ -116,8 +126,8 @@ class TestSOIWorker(SOIWorker):
         )
         stats: dict[str, Any] = {"mutating_calls": [], "tool_names": [], "tool_rounds": 0}
 
-        def on_tool(phase: str, name: str, detail: dict[str, Any]) -> None:
-            if phase == "start":
+        def on_tool(phase_str: str, name: str, detail: dict[str, Any]) -> None:
+            if phase_str == "start":
                 args_obj = detail.get("arguments") or {}
                 hint = ""
                 for key in ("query", "path", "url", "q", "dest", "entry_id"):
@@ -125,7 +135,7 @@ class TestSOIWorker(SOIWorker):
                         hint = f" {key}={args_obj[key]!r}"
                         break
                 self.log.log("tool_start", name=name, hint=hint, arguments=args_obj)
-            elif phase == "done":
+            elif phase_str == "done":
                 self.log.log(
                     "tool_done",
                     name=name,
@@ -133,7 +143,6 @@ class TestSOIWorker(SOIWorker):
                     summary=detail.get("summary") or "",
                 )
 
-        phase = payload.get("phase") or "soi_test"
         stream = bool(self.config.soi_think)
         self.log.log(
             "model_ask",
@@ -144,7 +153,10 @@ class TestSOIWorker(SOIWorker):
             stream=stream,
         )
         try:
-            user_text = format_test_user_message(FILING_INSTRUCTIONS, payload)
+            if is_p2:
+                user_text = format_read_refresh_message(READ_REFRESH_INSTRUCTIONS, payload)
+            else:
+                user_text = format_test_user_message(FILING_INSTRUCTIONS, payload)
             reply = session.ask(
                 user_text,
                 stream=stream,
@@ -449,3 +461,139 @@ class SOITestApp:
 
         threading.Thread(target=_worker, name="soi-test-run", daemon=True).start()
         return {"ok": True, "started": True}
+
+    def run_read_refresh(self) -> dict[str, Any]:
+        with self.lock:
+            if self.running:
+                return {"ok": False, "error": "Already running"}
+            if not self.sandbox:
+                return {"ok": False, "error": "No active session — reset first"}
+            self.running = True
+
+        def _worker() -> None:
+            try:
+                self._emit("run_start", phase="read_refresh")
+                run_config = replace(self.config, db_root=self.sandbox)
+
+                from ainet.tools.ops import DatabaseTools
+                from ollama.filing_payload import build_read_refresh_folders
+
+                db = DatabaseTools(self.sandbox)
+                folder_payloads = build_read_refresh_folders(db)
+                if not folder_payloads:
+                    self._emit("run_done", phase="read_refresh", result={"ok": True, "reason": "no stale folders"})
+                    with self.lock:
+                        self.last_result = {"ok": True, "ran": False, "reason": "no stale folders"}
+                    return
+
+                worker = TestSOIWorker(
+                    run_config,
+                    on_status=lambda msg: self._emit(
+                        "soi_log",
+                        text=str(msg) if not isinstance(msg, dict) else json.dumps(msg, default=str),
+                    ),
+                )
+                refreshed: list[str] = []
+                errors: dict[str, str] = {}
+
+                for fp in folder_payloads:
+                    folder = fp["folder"]
+                    read_path = f"{folder}/Read.json"
+                    notes_path = f"{folder}/Notes.json"
+                    hist_path = f"{folder}/History.json"
+                    new_entries = int(fp.get("new_entries_since_last_refresh") or 0)
+                    try:
+                        before_read = db.read_json(read_path)["data"]
+                    except (OSError, ValueError, KeyError):
+                        before_read = {}
+                    try:
+                        before_notes = db.read_json(notes_path)["data"]
+                    except (OSError, ValueError, KeyError):
+                        before_notes = None
+                    try:
+                        before_hist = db.read_json(hist_path)["data"]
+                    except (OSError, ValueError, KeyError):
+                        before_hist = None
+                    self._emit("read_refresh_folder", folder=folder, notes_count=fp["notes_count"],
+                               new_entries=new_entries)
+                    payload = {**fp, "phase": "read_refresh", "domain": folder.split("/", 1)[0]}
+                    reply, err, stats = worker._ask_soi(payload)
+                    if err:
+                        errors[folder] = err
+                        continue
+
+                    mut_count = len(stats.get("mutating_calls") or [])
+                    if mut_count == 0:
+                        errors[folder] = "model produced no mutating tool calls"
+                        continue
+
+                    try:
+                        after_read = db.read_json(read_path)["data"]
+                    except (OSError, ValueError, KeyError):
+                        after_read = {}
+                    try:
+                        after_notes = db.read_json(notes_path)["data"]
+                    except (OSError, ValueError, KeyError):
+                        after_notes = None
+                    try:
+                        after_hist = db.read_json(hist_path)["data"]
+                    except (OSError, ValueError, KeyError):
+                        after_hist = None
+
+                    # Require actual Read content change when there are new events to digest.
+                    digest_keys = (
+                        "summary",
+                        "state",
+                        "important_context",
+                        "recent_changes",
+                        "active_items",
+                        "known_facts",
+                        "uncertainties",
+                    )
+                    digest_changed = any(
+                        (before_read.get(k) if isinstance(before_read, dict) else None)
+                        != (after_read.get(k) if isinstance(after_read, dict) else None)
+                        for k in digest_keys
+                    )
+                    notes_changed = before_notes != after_notes
+                    hist_changed = before_hist != after_hist
+                    cleanup_changed = notes_changed or hist_changed
+                    if new_entries > 0 and not (digest_changed or cleanup_changed):
+                        errors[folder] = (
+                            "no Read digest update detected despite new entries; "
+                            "mark_read_refreshed-only run rejected"
+                        )
+                        continue
+
+                    refreshed.append(folder)
+                    # Safety net: clear stale flag only for accepted runs.
+                    try:
+                        from ainet.tools import readlog
+                        still = db.read_json(read_path)["data"]
+                        if readlog.read_needs_refresh(still):
+                            db.mark_read_refreshed(read_path)
+                    except (OSError, ValueError, KeyError):
+                        pass
+
+                self._refresh_current()
+                result = {
+                    "ok": not errors,
+                    "ran": True,
+                    "phase": "read_refresh",
+                    "refreshed": refreshed,
+                    "errors": errors,
+                }
+                with self.lock:
+                    self.last_result = result
+                self._emit("run_done", phase="read_refresh", result=result)
+            except Exception as exc:
+                tb = traceback.format_exc()
+                with self.lock:
+                    self.last_result = {"ok": False, "error": str(exc), "traceback": tb}
+                self._emit("run_error", phase="read_refresh", error=str(exc), traceback=tb)
+            finally:
+                with self.lock:
+                    self.running = False
+
+        threading.Thread(target=_worker, name="soi-test-p2", daemon=True).start()
+        return {"ok": True, "started": True, "phase": "read_refresh"}
