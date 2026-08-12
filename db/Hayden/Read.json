@@ -7,6 +7,28 @@
   "known_facts": [],
   "uncertainties": [],
   "last_updated": "",
-  "needs_update": false,
-  "read_changelog": []
+  "needs_update": true,
+  "read_changelog": [
+    {
+      "id": "a748f56b6f41",
+      "at": "2026-08-12T08:23:23+00:00",
+      "summary": "Create topic folder Hayden/School",
+      "source_path": "Hayden/School",
+      "status": "pending"
+    },
+    {
+      "id": "b484b56dd378",
+      "at": "2026-08-12T08:23:23+00:00",
+      "summary": "Seed Notes.json for Hayden/School",
+      "source_path": "Hayden/School/Notes.json",
+      "status": "pending"
+    },
+    {
+      "id": "d2cd7c74978f",
+      "at": "2026-08-12T08:23:23+00:00",
+      "summary": "Seed History.json for Hayden/School",
+      "source_path": "Hayden/School/History.json",
+      "status": "pending"
+    }
+  ]
 }

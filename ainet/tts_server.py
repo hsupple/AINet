@@ -67,6 +67,7 @@ elif torch.cuda.is_available():
 else:
     DEVICE = "cpu"
 
+# Prefer quality-stable clone by default. Set AINET_TTS_XVEC_ONLY=1 for speed.
 XVEC_ONLY = os.environ.get("AINET_TTS_XVEC_ONLY", "0") not in {"0", "false", "False"}
 SAVE_FILES = os.environ.get("AINET_TTS_SAVE", "0") not in {"0", "false", "False"}
 HOST = os.environ.get("AINET_TTS_HOST", "127.0.0.1")
@@ -78,11 +79,27 @@ _ready_at = 0.0
 
 
 def _pick_dtype() -> torch.dtype:
-    if DEVICE.startswith("cuda"):
-        if torch.cuda.is_bf16_supported():
-            return torch.bfloat16
+    if not DEVICE.startswith("cuda"):
+        return torch.float32
+    # RTX 20-series (Turing) is unstable with fp16 in this Qwen3-TTS build
+    # (device-side assert in TensorCompare). Prefer fp32 for correctness.
+    # Override with AINET_TTS_DTYPE=float16|bfloat16 if you want to experiment.
+    forced = os.environ.get("AINET_TTS_DTYPE", "").strip().lower()
+    if forced in {"float16", "fp16", "half"}:
         return torch.float16
+    if forced in {"bfloat16", "bf16"}:
+        return torch.bfloat16
+    if forced in {"float32", "fp32"}:
+        return torch.float32
     return torch.float32
+
+
+def _gen_kwargs(text: str) -> dict:
+    """Optional generate overrides. Keep empty unless explicitly enabled."""
+    if os.environ.get("AINET_TTS_TIGHT_GEN", "0") in {"0", "false", "False"}:
+        return {}
+    cap = min(2048, max(256, len(text) * 16 + 128))
+    return {"max_new_tokens": cap}
 
 
 def _load_model() -> Qwen3TTSModel:
@@ -102,6 +119,17 @@ def _load_model() -> Qwen3TTSModel:
 
     print(f"Loading Qwen3-TTS from {MODEL_DIR}")
     print(f"  device={DEVICE} dtype={dtype}")
+    if DEVICE.startswith("cuda"):
+        free, total = torch.cuda.mem_get_info()
+        print(
+            f"  gpu_free={free / (1024 ** 2):.0f}MiB / {total / (1024 ** 2):.0f}MiB  "
+            f"xvec_only={XVEC_ONLY}"
+        )
+        if free < 1.5 * (1024 ** 3):
+            print(
+                "  WARNING: low GPU free memory. Stop Ollama (`ollama stop qwen3:8b`) "
+                "or TTS will thrash (~8-10s/sentence)."
+            )
     model = Qwen3TTSModel.from_pretrained(str(MODEL_DIR), **kwargs)
     print("Qwen3-TTS loaded.")
     return model
@@ -176,29 +204,42 @@ def _synthesize(
         raise ValueError("text cannot be empty")
 
     xvec = XVEC_ONLY if x_vector_only_mode is None else bool(x_vector_only_mode)
+    gen_kwargs = _gen_kwargs(text)
 
     with _lock:
         t0 = time.perf_counter()
-        if reference_audio:
-            ref = Path(reference_audio)
-            if not ref.exists():
-                raise FileNotFoundError(f"Reference audio not found: {ref}")
-            if not xvec and not (reference_text or "").strip():
-                raise ValueError("reference_text is required when using reference_audio")
-            wavs, sample_rate = model.generate_voice_clone(
-                text=text,
-                language=language,
-                ref_audio=str(ref),
-                ref_text=reference_text or REF_TEXT,
-                x_vector_only_mode=xvec,
-            )
-        else:
-            prompt = _ensure_voice_prompt()
-            wavs, sample_rate = model.generate_voice_clone(
-                text=text,
-                language=language,
-                voice_clone_prompt=prompt,
-            )
+        try:
+            if reference_audio:
+                ref = Path(reference_audio)
+                if not ref.exists():
+                    raise FileNotFoundError(f"Reference audio not found: {ref}")
+                if not xvec and not (reference_text or "").strip():
+                    raise ValueError("reference_text is required when using reference_audio")
+                wavs, sample_rate = model.generate_voice_clone(
+                    text=text,
+                    language=language,
+                    ref_audio=str(ref),
+                    ref_text=reference_text or REF_TEXT,
+                    x_vector_only_mode=xvec,
+                    **gen_kwargs,
+                )
+            else:
+                prompt = _ensure_voice_prompt()
+                wavs, sample_rate = model.generate_voice_clone(
+                    text=text,
+                    language=language,
+                    voice_clone_prompt=prompt,
+                    **gen_kwargs,
+                )
+        except Exception as exc:
+            # A device assert poisons the CUDA context until process restart.
+            if DEVICE.startswith("cuda"):
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+            print(f"TTS ERROR: {exc}")
+            raise
         elapsed = time.perf_counter() - t0
         print(f"TTS {elapsed:.2f}s  chars={len(text)}  text={text[:80]!r}")
         return wavs[0], int(sample_rate)

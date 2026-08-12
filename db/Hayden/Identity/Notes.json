@@ -1,6 +1,17 @@
 {
   "title": "",
-  "key_claims": [],
-  "evidence": [],
-  "last_updated": ""
+  "key_claims": [
+    "how does fission work"
+  ],
+  "evidence": [
+    {
+      "text": "how does fission work",
+      "assistant_clip": "Nuclear fission is a process in which the nucleus of a heavy atom, such as uranium-235 or plutonium-239, splits into two smaller nuclei, releasing a significant amount of energy in the process. Here's a simplified breakdown:\n\n1. **Initiatio…",
+      "entry_ids": [
+        "e81104b8696b47a1"
+      ],
+      "at": "2026-08-11T14:46:13+00:00"
+    }
+  ],
+  "last_updated": "2026-08-11T14:46:13+00:00"
 }

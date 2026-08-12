@@ -1,0 +1,15 @@
+{
+  "_ainet": {
+    "doc": "Notes.json",
+    "role": "AI-written filing notes. Each note cites a changelog entry id as evidence.",
+    "note_shape": {
+      "text": "Short note the filer wrote about the turn — not a raw paste.",
+      "id": "Changelog entry id (evidence)",
+      "dest": "Simple destination label (Values, Memories, BIO, …)",
+      "filed_at": "ISO timestamp"
+    },
+    "edit": "Live files start with notes: []."
+  },
+  "notes": [],
+  "last_updated": ""
+}

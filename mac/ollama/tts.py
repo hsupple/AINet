@@ -102,6 +102,34 @@ class TtsClient:
         return b64, sr
 
 
+# Emoji / symbol noise that should not be spoken (or billed as a full TTS call).
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001F9FF"
+    "\U0001FA00-\U0001FAFF"
+    "\U00002700-\U000027BF"
+    "\U00002600-\U000026FF"
+    "\U0000FE0F"
+    "\U0000200D"
+    "]+",
+    flags=re.UNICODE,
+)
+_WORDY_RE = re.compile(r"[A-Za-z0-9]")
+
+
+def normalize_for_speech(text: str) -> str:
+    """Strip emojis/symbols and collapse whitespace for TTS."""
+    cleaned = _EMOJI_RE.sub(" ", text or "")
+    cleaned = re.sub(r"[*_`#~>|]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def is_speakable(text: str) -> bool:
+    cleaned = normalize_for_speech(text)
+    return bool(cleaned) and bool(_WORDY_RE.search(cleaned))
+
+
 def split_speakable(buffer: str, *, final: bool = False, min_chars: int = 12) -> tuple[list[str], str]:
     """Pull completed speakable chunks from a streaming text buffer."""
     if not buffer:
@@ -123,18 +151,23 @@ def split_speakable(buffer: str, *, final: bool = False, min_chars: int = 12) ->
         rest = rest[end:]
         if not piece or piece.isspace():
             continue
+        spoken = normalize_for_speech(piece)
+        if not is_speakable(spoken):
+            continue
         # Hold very short fragments unless final flush.
-        if len(piece) < min_chars and not final and not piece.endswith("\n"):
+        if len(spoken) < min_chars and not final and not piece.endswith("\n"):
             # Put back and wait for more unless we already have a strong end.
             if not re.search(r"[.!?…][\"')\]]*$", piece):
                 rest = piece + (" " if rest and not rest[0].isspace() else "") + rest
                 break
-        chunks.append(re.sub(r"\s+", " ", piece).strip())
+        chunks.append(spoken)
 
     if final:
-        tail = rest.strip()
-        if tail:
-            chunks.append(re.sub(r"\s+", " ", tail))
+        tail = normalize_for_speech(rest)
+        if is_speakable(tail):
+            chunks.append(tail)
+            rest = ""
+        else:
             rest = ""
     return chunks, rest
 
@@ -198,8 +231,8 @@ class SpeechPipeline:
             item = self._q.get()
             if item is None:
                 return
-            text = item.strip()
-            if not text:
+            text = normalize_for_speech(item)
+            if not is_speakable(text):
                 continue
             seq = self._seq
             self._seq += 1

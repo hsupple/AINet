@@ -34,6 +34,7 @@ _MUTATING = {
     "append_changelog",
     "capture_inbox",
     "file_by_id",
+    "file_note",
 }
 
 
@@ -283,8 +284,10 @@ class ChatSession:
 
     @staticmethod
     def _tool_result_summary(name: str, result: dict[str, Any]) -> str:
-        if not result.get("ok", True) and result.get("error"):
-            return str(result["error"])[:160]
+        if not result.get("ok", True):
+            if result.get("error"):
+                return str(result["error"])[:160]
+            return "failed"
         if name == "web_search":
             n = result.get("count")
             if n is None and isinstance(result.get("results"), list):
@@ -411,6 +414,21 @@ class ChatSession:
             if message.get("role") != "user":
                 continue
             raw = str(message.get("content") or "")
+            label = "changelog_entries:"
+            label_idx = raw.find(label)
+            if label_idx >= 0:
+                chunk = raw[label_idx + len(label) :].strip()
+                if chunk.startswith("inbox_unfiled:"):
+                    chunk = chunk.split("inbox_unfiled:", 1)[0].strip()
+                try:
+                    entries = json.loads(chunk)
+                except json.JSONDecodeError:
+                    entries = None
+                if isinstance(entries, list):
+                    for entry in entries:
+                        if isinstance(entry, dict) and entry.get("user_text"):
+                            parts.append(str(entry["user_text"]))
+                    break
             idx = raw.find("{")
             if idx < 0:
                 parts.append(raw)
@@ -429,7 +447,7 @@ class ChatSession:
 
 
 def _redact_assistant_fields(obj: Any) -> Any:
-    """SOI never sees OAC assistant_text, even via tool reads."""
+    """SOI never sees OAC assistant_text, even via tool reads (source-of-truth path)."""
     if isinstance(obj, dict):
         return {
             k: _redact_assistant_fields(v)
@@ -438,4 +456,4 @@ def _redact_assistant_fields(obj: Any) -> Any:
         }
     if isinstance(obj, list):
         return [_redact_assistant_fields(x) for x in obj]
-        return obj
+    return obj

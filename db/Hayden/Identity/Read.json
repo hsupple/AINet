@@ -7,6 +7,28 @@
   "known_facts": [],
   "uncertainties": [],
   "last_updated": "",
-  "needs_update": false,
-  "read_changelog": []
+  "needs_update": true,
+  "read_changelog": [
+    {
+      "id": "eff072052619",
+      "at": "2026-08-11T14:46:13+00:00",
+      "summary": "File personal evidence into Hayden/Identity",
+      "source_path": "Hayden/Identity/Notes.json",
+      "status": "pending"
+    },
+    {
+      "id": "b5e453b102ec",
+      "at": "2026-08-11T14:46:13+00:00",
+      "summary": "File personal history into Hayden/Identity",
+      "source_path": "Hayden/Identity/History.json",
+      "status": "pending"
+    },
+    {
+      "id": "8aec726f5586",
+      "at": "2026-08-11T14:46:13+00:00",
+      "summary": "File voice evidence from prompt",
+      "source_path": "Hayden/Identity/Voice.json",
+      "status": "pending"
+    }
+  ]
 }

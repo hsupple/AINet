@@ -414,6 +414,40 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "file_note",
+            "description": (
+                "Phase 1 filing — preferred for SOI test. Pass entry_id, dest (simple label), "
+                "and text (a short note YOU write about the turn). Host stores the note in "
+                "<folder>/Notes.json with id as evidence, and the raw message + id in History.json. "
+                "dest examples: Values, Memories, Psychology, Habits, Desires, Pantry, discard."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {
+                        "type": "string",
+                        "description": "Changelog entry id",
+                    },
+                    "dest": {
+                        "type": "string",
+                        "description": (
+                            "Folder from the folders list — path (Hayden/School, Hayden/Values) "
+                            "or folder name (Values, Pantry). discard for greetings only."
+                        ),
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Short note you write summarizing what to keep (not a raw paste)",
+                    },
+                    "summary": {"type": "string"},
+                },
+                "required": ["entry_id", "dest"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "file_by_id",
             "description": (
                 "SOI preferred filing tool. Pass Changelog entry_id(s) or Inbox inbox_id only — "
@@ -509,6 +543,7 @@ def tools_subset(names: tuple[str, ...] | list[str] | None = None) -> list[dict[
 
 def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
     from ollama import file_by_id as file_by_id_mod
+    from ollama import file_note as file_note_mod
 
     return {
         "list_dir": lambda **kw: db.list_dir(kw.get("path", ".")),
@@ -576,6 +611,13 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
             entry_ids=kw.get("entry_ids"),
             inbox_id=str(kw.get("inbox_id") or ""),
             dest=str(kw.get("dest") or ""),
+            summary=kw.get("summary"),
+        ),
+        "file_note": lambda **kw: file_note_mod.file_note(
+            db,
+            entry_id=str(kw.get("entry_id") or kw.get("id") or ""),
+            dest=str(kw.get("dest") or ""),
+            text=str(kw.get("text") or ""),
             summary=kw.get("summary"),
         ),
         "get_tools": lambda **kw: catalog_tools(

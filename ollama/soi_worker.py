@@ -21,6 +21,9 @@ from ollama.content_filing import (
     entry_kind,
     is_ephemeral_text,
 )
+from ollama.dest_resolver import build_file_structure, list_dest_labels
+from ollama.filing_payload import build_test_filing_payload, format_test_user_message
+from ollama.prompts.soi_test import FILING_INSTRUCTIONS
 from ollama.session import ChatSession
 from ollama.soi_log import SOILogger
 from ollama.topics import record_personal_filing
@@ -230,6 +233,24 @@ class SOIWorker:
         )
         return out
 
+    def _build_filing_payload(
+        self,
+        batch_changelog: list[dict[str, Any]],
+        batch_inbox: list[dict[str, Any]],
+        *,
+        layout: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _ = layout
+        payload = build_test_filing_payload(
+            self.db,
+            batch_changelog,
+            batch_inbox,
+            entry_for_soi=_entry_for_soi,
+            inbox_for_soi=_inbox_for_soi,
+        )
+        payload["phase"] = "filing"
+        return payload
+
     def _run_filing_batch(
         self,
         batch_changelog: list[dict[str, Any]],
@@ -248,19 +269,7 @@ class SOIWorker:
                     "course_cop": "School/Courses/<Code>",
                     "project_cop": "Work/Projects/<Name>",
                 }
-        snapshot = self._domain_snapshot()
-        payload = {
-            "phase": "filing",
-            "folderrules": layout,
-            "domain_snapshot": snapshot,
-            "changelog_entries": [_entry_for_soi(e) for e in batch_changelog],
-            "inbox_unfiled": [_inbox_for_soi(c) for c in batch_inbox],
-            "instructions": (
-                "tool_calls only. No essays. No markdown. "
-                "create_cop only if user_text names that course/project. "
-                "Feelings → dest=psychology. Do not invent COPs. file_by_id copies text by id."
-            ),
-        }
+        payload = self._build_filing_payload(batch_changelog, batch_inbox, layout=layout)
 
         reply, err, stats = self._ask_soi(payload)
         retries = 0
@@ -293,13 +302,13 @@ class SOIWorker:
             if (by_entry.get(eid) and _is_ephemeral_entry(by_entry[eid]))
         }
         for call in stats.get("mutating_calls") or []:
-            if call.get("tool") != "file_by_id":
+            if call.get("tool") not in {"file_by_id", "file_note"}:
                 continue
             if call.get("ok") is False:
                 continue
             args = call.get("args") if isinstance(call.get("args"), dict) else {}
             result = call.get("result") if isinstance(call.get("result"), dict) else {}
-            dest = str(args.get("dest") or result.get("action") or "").strip().lower()
+            dest = str(args.get("dest") or result.get("action") or result.get("dest") or "").strip().lower()
             ids = [str(x) for x in (args.get("entry_ids") or result.get("entry_ids") or []) if x]
             eid = str(args.get("entry_id") or args.get("id") or "").strip()
             if eid:
@@ -315,8 +324,10 @@ class SOIWorker:
                         dest_by_id[item] = ""
                     continue
                 dest_path = str(
-                    result.get("filed_to")
+                    result.get("folder")
+                    or result.get("filed_to")
                     or result.get("path")
+                    or result.get("notes_path")
                     or args.get("dest")
                     or ""
                 ).replace("\\", "/")
@@ -324,12 +335,7 @@ class SOIWorker:
                     continue
                 handled_by_id.add(item)
                 claimed_filed.add(item)
-                dest_by_id[item] = str(
-                    result.get("filed_to")
-                    or result.get("path")
-                    or args.get("dest")
-                    or ""
-                )
+                dest_by_id[item] = dest_path
 
         domain_plans: set[str] = set()
         for call in stats.get("mutating_calls") or []:
@@ -602,6 +608,8 @@ class SOIWorker:
                     f"{size_rules} "
                     "Do not dump unrelated domains. Prefer patch_json. "
                     "Do NOT dump read_changelog into Notes.json — Notes/History are filled at filing time. "
+                    "Read Notes.json and History.json in the same folder, then update Read.json (hot index) "
+                    "and Schedule.json (due dates/deadlines from notes). "
                     "Also observe Hayden's speech from recent Masterlog turns: curse rate, tone, "
                     "buddy greetings, how questions are asked. Patch Hayden/Identity/Voice.json and "
                     "Personality.json with evidence only (no invented traits). "
@@ -683,7 +691,7 @@ class SOIWorker:
             auto_mode=False,
         )
         session = ChatSession(
-            mode=get_mode("soi"),
+            mode=get_mode("soi_test" if (payload.get("phase") or "filing") == "filing" else "soi"),
             config=soi_config,
             client=self.client,
             auto_mode=False,
@@ -695,7 +703,7 @@ class SOIWorker:
             if phase == "start":
                 args_obj = detail.get("arguments") or {}
                 hint = ""
-                for key in ("query", "path", "url", "q", "title", "slug"):
+                for key in ("query", "path", "url", "q", "dest", "entry_id", "title", "slug"):
                     if key in args_obj and args_obj[key]:
                         hint = f" {key}={args_obj[key]!r}"
                         break
@@ -722,13 +730,22 @@ class SOIWorker:
             stream=stream,
         )
         try:
-            reply = session.ask(
-                "SOI job — process this batch with TOOL CALLS (mutations required):\n"
-                + json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                stream=stream,
-                on_thinking=None,
-                on_tool=on_tool,
-            )
+            if phase == "filing":
+                user_text = format_test_user_message(FILING_INSTRUCTIONS, payload)
+                reply = session.ask(
+                    user_text,
+                    stream=stream,
+                    on_thinking=None,
+                    on_tool=on_tool,
+                )
+            else:
+                reply = session.ask(
+                    "SOI job — process this batch with TOOL CALLS (mutations required):\n"
+                    + json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                    stream=stream,
+                    on_thinking=None,
+                    on_tool=on_tool,
+                )
             stats["mutating_calls"] = list(getattr(session, "last_mutating_calls", []) or [])
             stats["tool_names"] = list(getattr(session, "last_tool_names", []) or [])
             stats["tool_rounds"] = int(getattr(session, "last_tool_rounds", 0) or 0)

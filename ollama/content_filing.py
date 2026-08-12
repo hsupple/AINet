@@ -7,7 +7,7 @@ from typing import Any
 
 
 _EPHEMERAL = re.compile(
-    r"^\s*(hi|hey|hello|yo|sup|hiya|hi bud|hey pal|good (morning|afternoon|evening)"
+    r"^\s*(hi|hey|hello|heyo|yo|sup|hiya|hi bud|hey pal|bruh|good (morning|afternoon|evening)"
     r"|thanks|thank you|thx|ty|cool|ok|okay|got it|bye|good ?night|gg|np|yw|lol ok)\b[.!]?\s*$",
     re.I,
 )

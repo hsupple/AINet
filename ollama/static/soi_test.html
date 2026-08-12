@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SOI DB Outline</title>
+  <style>
+    :root {
+      --bg: #0f1218;
+      --panel: #161b23;
+      --line: #2a303b;
+      --text: #e7ecf5;
+      --muted: #97a4b7;
+      --accent: #67a0ff;
+      --green: #34d399;
+      --amber: #fbbf24;
+      --red: #f87171;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      display: grid;
+      grid-template-rows: auto 1fr 210px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding: 0.7rem 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.7rem;
+    }
+    .title { font-weight: 700; letter-spacing: 0.02em; }
+    .meta { color: var(--muted); font-size: 0.8rem; }
+    .legend { color: var(--muted); font-size: 0.75rem; }
+    .legend .c { color: var(--green); }
+    .legend .m { color: var(--amber); }
+    .legend .d { color: var(--red); }
+    .toolbar { display: flex; gap: 0.45rem; }
+    button {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    button.primary {
+      border-color: transparent;
+      background: var(--accent);
+      color: #0b1220;
+      font-weight: 700;
+    }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .layout {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+    }
+    .left, .right { min-height: 0; overflow: hidden; }
+    .left { border-right: 1px solid var(--line); background: var(--panel); }
+    .section-title {
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 0.55rem 0.7rem;
+    }
+    .tree-list {
+      height: calc(100% - 34px);
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+    }
+    .row {
+      padding: 0.37rem 0.55rem;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .row:hover, .row.sel { background: rgba(103,160,255,0.13); }
+    .mark {
+      display: inline-block;
+      width: 2.15rem;
+      text-align: center;
+      margin-right: 0.15rem;
+      font-weight: 700;
+    }
+    .mark.c { color: var(--green); }
+    .mark.m { color: var(--amber); }
+    .mark.d { color: var(--red); }
+    .detail {
+      height: 100%;
+      overflow: auto;
+      padding: 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.75rem;
+      line-height: 1.42;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .empty { color: var(--muted); }
+    .logs {
+      border-top: 1px solid var(--line);
+      background: #0e1218;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .logs-head {
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 0.55rem 0.7rem;
+      display: flex;
+      justify-content: space-between;
+    }
+    .logs-body {
+      min-height: 0;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      line-height: 1.35;
+      padding: 0.45rem 0.7rem 0.7rem;
+      color: #d2d9e6;
+      white-space: pre-wrap;
+    }
+    .log-row {
+      padding: 0.15rem 0;
+      border-bottom: 1px dashed rgba(255,255,255,0.04);
+    }
+    @media (max-width: 1100px) {
+      .layout { grid-template-columns: 1fr; grid-template-rows: 1fr 240px; }
+      body { grid-template-rows: auto 1fr 180px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="title">SOI DB Outline</div>
+      <div class="meta" id="meta">Loading...</div>
+      <div class="legend">Marks: <span class="c">!+</span> created, <span class="m">!~</span> modified, <span class="d">!-</span> deleted</div>
+    </div>
+    <div class="toolbar">
+      <button id="reset">Reset</button>
+      <button class="primary" id="run">Run filing</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <section class="left">
+      <div class="section-title">Database outline</div>
+      <div class="tree-list" id="tree"></div>
+    </section>
+    <section class="right">
+      <div class="detail" id="detail"><span class="empty">Select a JSON file to inspect.</span></div>
+    </section>
+  </div>
+  <section class="logs">
+    <div class="logs-head">
+      <span>SOI logs</span>
+      <span id="log-count">0</span>
+    </div>
+    <div class="logs-body" id="logs"><span class="empty">No events yet.</span></div>
+  </section>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let eventAfter = 0;
+    let pollTimer = null;
+    let selectedPath = "";
+    let changeIndex = {};
+    let logRows = [];
+
+    async function api(path, opts) {
+      const res = await fetch(path, opts);
+      return res.json();
+    }
+
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function markerForPath(path, isDir) {
+      const exact = changeIndex[path];
+      if (exact) return exact;
+      if (!isDir) return "";
+      const prefix = `${path}/`;
+      let hit = "";
+      for (const [p, kind] of Object.entries(changeIndex)) {
+        if (!p.startsWith(prefix)) continue;
+        if (kind === "deleted") return "deleted";
+        if (kind === "created") hit = hit || "created";
+        else if (!hit) hit = "modified";
+      }
+      return hit;
+    }
+
+    function renderTreeNode(node, depth = 0) {
+      if (!node) return "";
+      const isDir = node.type === "dir";
+      const kind = markerForPath(node.path || "", isDir);
+      const mark = kind === "created" ? "!+" : kind === "modified" ? "!~" : kind === "deleted" ? "!-" : "";
+      const markClass = kind === "created" ? "c" : kind === "modified" ? "m" : kind === "deleted" ? "d" : "";
+      const icon = isDir ? "📁" : "📄";
+      const pad = 10 + depth * 14;
+      let html = `<div class="row tree-row${selectedPath === node.path ? " sel" : ""}" data-path="${esc(node.path)}" style="padding-left:${pad}px"><span class="mark ${markClass}">${esc(mark)}</span>${icon} ${esc(node.name)}</div>`;
+      if (Array.isArray(node.children)) {
+        for (const child of node.children) html += renderTreeNode(child, depth + 1);
+      }
+      return html;
+    }
+
+    async function refreshChanges() {
+      const chg = await api("/api/changes");
+      changeIndex = {};
+      if (chg.ok) {
+        for (const c of chg.changes || []) {
+          if (c && c.path) changeIndex[c.path] = c.kind || "modified";
+        }
+      }
+    }
+
+    async function refreshTree() {
+      const data = await api("/api/tree?path=.&depth=6");
+      if (!data.ok) {
+        $("tree").innerHTML = `<div class="row empty">${esc(data.error || "tree unavailable")}</div>`;
+        return;
+      }
+      $("tree").innerHTML = renderTreeNode(data.tree);
+      document.querySelectorAll(".tree-row").forEach((el) => {
+        el.onclick = async () => {
+          selectedPath = el.dataset.path || "";
+          await refreshTree();
+          if (!selectedPath.endsWith(".json")) {
+            $("detail").textContent = selectedPath;
+            return;
+          }
+          const file = await api(`/api/file?path=${encodeURIComponent(selectedPath)}&view=current`);
+          $("detail").textContent = file.ok
+            ? (file.json ? JSON.stringify(file.json, null, 2) : file.content)
+            : (file.error || "read failed");
+        };
+      });
+    }
+
+    async function refreshStatus() {
+      const st = await api("/api/status");
+      const state = st.running ? "running" : "idle";
+      $("meta").textContent = `${state} • pending ${st.pending_count} • changes ${st.changes_count} • model ${st.model}`;
+      $("run").disabled = !!st.running;
+      $("reset").disabled = !!st.running;
+    }
+
+    async function refreshAll() {
+      await Promise.all([refreshStatus(), refreshChanges()]);
+      await refreshTree();
+    }
+
+    function textForEvent(ev) {
+      if (ev.event === "soi_log") return ev.text || "";
+      if (ev.event === "run_start") return `run_start ${ev.phase || ""}`;
+      if (ev.event === "run_done") return `run_done ${ev.phase || ""}`;
+      if (ev.event === "run_error") return `run_error ${ev.error || ""}`;
+      if (ev.event === "reset") return "reset";
+      if (ev.event === "tool") return `tool ${ev.tool || ""} ${ev.ok === false ? "FAIL" : "ok"}`;
+      return `${ev.event} ${ev.text || ev.phase || ""}`.trim();
+    }
+
+    function renderLogs() {
+      const box = $("logs");
+      $("log-count").textContent = String(logRows.length);
+      if (!logRows.length) {
+        box.innerHTML = '<span class="empty">No events yet.</span>';
+        return;
+      }
+      box.innerHTML = logRows.map((r) => `<div class="log-row">${esc(r)}</div>`).join("");
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function pollEvents() {
+      const ev = await api(`/api/events?after=${eventAfter}`);
+      if (ev.events && ev.events.length) {
+        eventAfter = Math.max(...ev.events.map((e) => e.id || 0));
+        for (const e of ev.events) {
+          const row = `${e.ts || ""}  ${textForEvent(e)}`.trim();
+          logRows.push(row);
+        }
+        if (logRows.length > 300) logRows = logRows.slice(-300);
+        renderLogs();
+        await refreshAll();
+      } else if (ev.running) {
+        await refreshStatus();
+      }
+    }
+
+    function startPoll() {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(pollEvents, 1200);
+    }
+
+    $("run").onclick = async () => {
+      await api("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      await refreshStatus();
+    };
+
+    $("reset").onclick = async () => {
+      selectedPath = "";
+      eventAfter = 0;
+      logRows = [];
+      renderLogs();
+      $("detail").innerHTML = '<span class="empty">Select a JSON file to inspect.</span>';
+      await api("/api/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      await refreshAll();
+    };
+
+    (async function init() {
+      await refreshAll();
+      renderLogs();
+      startPoll();
+    })();
+  </script>
+</body>
+</html>

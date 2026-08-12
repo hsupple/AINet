@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ollama.modes import companion, conversation, dormant, planner, soi
+from ollama.modes import companion, conversation, dormant, planner, soi, soi_test
 from ollama.modes.base import Mode
 
 _MODES: dict[str, Mode] = {
@@ -10,6 +10,7 @@ _MODES: dict[str, Mode] = {
     conversation.MODE.id: conversation.MODE,
     planner.MODE.id: planner.MODE,
     soi.MODE.id: soi.MODE,
+    soi_test.MODE.id: soi_test.MODE,
     "dormant": dormant.MODE,
 }
 

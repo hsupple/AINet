@@ -438,4 +438,4 @@ def _redact_assistant_fields(obj: Any) -> Any:
         }
     if isinstance(obj, list):
         return [_redact_assistant_fields(x) for x in obj]
-        return obj
+    return obj

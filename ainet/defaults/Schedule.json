@@ -1,0 +1,15 @@
+{
+  "_ainet": {
+    "doc": "Schedule.json",
+    "role": "Due dates and timed items for this folder. SOI Phase 2 fills from Notes.json and History.json.",
+    "item_shape": {
+      "text": "",
+      "due": "",
+      "source_note_id": "",
+      "status": "active"
+    },
+    "edit": "Live files start with items: []."
+  },
+  "items": [],
+  "last_updated": ""
+}
