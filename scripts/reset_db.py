@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Reset the local AINet database to an empty skeleton.
+"""Reset / bootstrap the local AINet database to an empty skeleton.
 
-Keeps schema (Rules.txt, Folderrules.json) and the domain folder tree.
-Clears OAC/SOI queues, runtime, generated people/history, and
-empties remaining JSON leaves (named templates when they exist).
+Keeps schema (Rules.txt, Folderrules.json) from git. Everything else under
+db/ is local — after a fresh clone, create it with:
+
+  python scripts/reset_db.py --yes
+
+That writes the folder tree + empty JSON leaves from ainet/defaults templates,
+clears OAC/SOI queues/runtime, and empties living content.
 
 Does not touch mac/db. Real db/ is not changed unless you pass --yes.
 
@@ -92,6 +96,8 @@ SKELETON_DIRS = (
     "Hayden/Psychology",
     "Hayden/Inbox",
     "Hayden/History",
+    "Hayden/Planner",
+    "Hayden/Plans",
     "School",
     "School/Courses",
     "School/History",
@@ -102,6 +108,111 @@ SKELETON_DIRS = (
     "Household/Pantry",
     "Household/Maintenance",
     "Household/History",
+    "Projects",
+    "Questions",
+)
+
+# Empty leaves created on fresh clone (shapes come from ainet/defaults).
+SEED_FILES = (
+    "Hayden/Body/Energy.json",
+    "Hayden/Body/Health.json",
+    "Hayden/Body/History.json",
+    "Hayden/Body/Notes.json",
+    "Hayden/Body/Read.json",
+    "Hayden/Body/Sensory.json",
+    "Hayden/Desires/Goals.json",
+    "Hayden/Desires/History.json",
+    "Hayden/Desires/Longings.json",
+    "Hayden/Desires/Notes.json",
+    "Hayden/Desires/Read.json",
+    "Hayden/Desires/Wants.json",
+    "Hayden/Habits/Disciplines.json",
+    "Hayden/Habits/History.json",
+    "Hayden/Habits/Notes.json",
+    "Hayden/Habits/Patterns.json",
+    "Hayden/Habits/Read.json",
+    "Hayden/Habits/Routines.json",
+    "Hayden/Habits/Vices.json",
+    "Hayden/History.json",
+    "Hayden/Identity/Boundaries.json",
+    "Hayden/Identity/Core.json",
+    "Hayden/Identity/History.json",
+    "Hayden/Identity/Notes.json",
+    "Hayden/Identity/Personality.json",
+    "Hayden/Identity/Read.json",
+    "Hayden/Identity/Sides.json",
+    "Hayden/Identity/Voice.json",
+    "Hayden/Inbox/Captures.json",
+    "Hayden/Inbox/History.json",
+    "Hayden/Inbox/Notes.json",
+    "Hayden/Inbox/Read.json",
+    "Hayden/Memories/History.json",
+    "Hayden/Memories/Index.json",
+    "Hayden/Memories/Milestones/History.json",
+    "Hayden/Memories/Milestones/Log.json",
+    "Hayden/Memories/Milestones/Notes.json",
+    "Hayden/Memories/Milestones/Read.json",
+    "Hayden/Memories/Notes.json",
+    "Hayden/Memories/Read.json",
+    "Hayden/Notes.json",
+    "Hayden/Plan.json",
+    "Hayden/Planner/History.json",
+    "Hayden/Planner/Notes.json",
+    "Hayden/Planner/Read.json",
+    "Hayden/Plans/History.json",
+    "Hayden/Plans/Notes.json",
+    "Hayden/Plans/Read.json",
+    "Hayden/Preferences/Aesthetic.json",
+    "Hayden/Preferences/Dislikes.json",
+    "Hayden/Preferences/Food.json",
+    "Hayden/Preferences/History.json",
+    "Hayden/Preferences/Lifestyle.json",
+    "Hayden/Preferences/Likes.json",
+    "Hayden/Preferences/Media.json",
+    "Hayden/Preferences/Notes.json",
+    "Hayden/Preferences/Read.json",
+    "Hayden/Profile.json",
+    "Hayden/Psychology/Attachments.json",
+    "Hayden/Psychology/Coping.json",
+    "Hayden/Psychology/Defense.json",
+    "Hayden/Psychology/Fears.json",
+    "Hayden/Psychology/History.json",
+    "Hayden/Psychology/Notes.json",
+    "Hayden/Psychology/Read.json",
+    "Hayden/Psychology/Schedule.json",
+    "Hayden/Psychology/Triggers.json",
+    "Hayden/Read.json",
+    "Hayden/Relationships/History.json",
+    "Hayden/Relationships/Index.json",
+    "Hayden/Relationships/Notes.json",
+    "Hayden/Relationships/Read.json",
+    "Hayden/Relationships/Schedule.json",
+    "Hayden/Secrets/History.json",
+    "Hayden/Secrets/Index.json",
+    "Hayden/Secrets/Notes.json",
+    "Hayden/Secrets/Read.json",
+    "Hayden/Values/History.json",
+    "Hayden/Values/Notes.json",
+    "Hayden/Values/Principles.json",
+    "Hayden/Values/Priorities.json",
+    "Hayden/Values/Read.json",
+    "Household/History.json",
+    "Household/Maintenance/History.json",
+    "Household/Maintenance/Notes.json",
+    "Household/Maintenance/Read.json",
+    "Household/Notes.json",
+    "Household/Pantry/History.json",
+    "Household/Pantry/Notes.json",
+    "Household/Pantry/Read.json",
+    "Household/Read.json",
+    "Household/Wants.json",
+    "Projects/History.json",
+    "Projects/Notes.json",
+    "Projects/Plan.json",
+    "Projects/Read.json",
+    "Questions/History.json",
+    "Questions/Notes.json",
+    "Questions/Read.json",
 )
 
 
@@ -179,6 +290,20 @@ def _ensure_skeleton(root: Path, plan: ResetPlan, *, dry_run: bool) -> None:
                 lambda k=keep: k.write_text("", encoding="utf-8"),
                 f"gitkeep {rel}/.gitkeep",
             )
+
+
+def _ensure_seed_files(root: Path, plan: ResetPlan, *, dry_run: bool) -> None:
+    """Create missing standard JSON leaves from ainet/defaults (fresh-clone path)."""
+    for rel in SEED_FILES:
+        path = root / rel
+        if path.exists():
+            continue
+
+        def write_seed(p: Path = path, r: str = rel) -> None:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(p, load_default_for_path(r))
+
+        plan.apply(dry_run, write_seed, f"seed {rel}")
 
 
 def _unlink(path: Path) -> None:
@@ -324,7 +449,17 @@ def reset_db(
     backup: bool,
 ) -> ResetPlan:
     if not root.exists():
-        raise SystemExit(f"DB root does not exist: {root}")
+        if dry_run:
+            plan = ResetPlan(root)
+            plan.log(f"mkdir {root}")
+            return plan
+        root.mkdir(parents=True, exist_ok=True)
+    schema = (root / "Rules.txt", root / "Folderrules.json")
+    if not all(p.is_file() for p in schema):
+        raise SystemExit(
+            "db/Rules.txt and db/Folderrules.json are required (they come from git). "
+            "Clone/pull the repo first, then run: python scripts/reset_db.py --yes"
+        )
     plan = ResetPlan(root)
 
     if backup and not dry_run:
@@ -353,8 +488,10 @@ def reset_db(
                 )
     else:
         _clear_generated(root, plan, dry_run=dry_run)
+        _ensure_seed_files(root, plan, dry_run=dry_run)
         _reset_content(root, plan, dry_run=dry_run)
         _ensure_skeleton(root, plan, dry_run=dry_run)
+        _ensure_seed_files(root, plan, dry_run=dry_run)
     return plan
 
 

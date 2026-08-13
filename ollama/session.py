@@ -14,6 +14,7 @@ from ollama.content_filing import cop_name_in_text
 from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
 from ollama.conversation_store import ConversationStore
+from ollama.inference_gate import INFERENCE_GATE
 from ollama.modes import get_mode
 from ollama.modes.base import READ_TOOLS, Mode
 from ollama.router import suggest_mode
@@ -122,6 +123,25 @@ class ChatSession:
         return self.mode
 
     def ask(
+        self,
+        user_text: str,
+        *,
+        stream: bool = False,
+        on_token: TokenCallback | None = None,
+        on_thinking: ThinkingCallback | None = None,
+        on_tool: ToolCallback | None = None,
+    ) -> str:
+        # OAC + SOI share one Ollama — never overlap inference (UI lockups / hung streams).
+        with INFERENCE_GATE:
+            return self._ask_locked(
+                user_text,
+                stream=stream,
+                on_token=on_token,
+                on_thinking=on_thinking,
+                on_tool=on_tool,
+            )
+
+    def _ask_locked(
         self,
         user_text: str,
         *,
@@ -249,13 +269,19 @@ class ChatSession:
         else:
             final_text = "I hit the tool-call limit for this turn. Try again with a narrower ask."
 
-        if self.store and self.session_id and self.mode.role == "oac":
+        if self.store and self.mode.role == "oac":
+            if not self.session_id or not self.store.session_exists(self.session_id):
+                self.session_id = self.store.ensure_session(mode_id=self.mode.id)
             self.store.append_turn(
                 self.session_id,
                 user_text=user_text,
                 assistant_text=final_text,
                 mode_id=self.mode.id,
             )
+            # append_turn may have minted a new session after a db wipe
+            current = self.store.current_session_id()
+            if current:
+                self.session_id = current
 
         self.touch()
         if stream and on_token is not None:

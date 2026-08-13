@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from ainet.tools.browser import open_chrome
 from ainet.tools.ops import DatabaseTools
 from ainet.tools.paths import PathError
 from ainet.tools.permissions import PermissionError_
@@ -11,7 +12,15 @@ from ainet.tools.web import web_fetch, web_search
 
 # OAC-safe tools (no general DB mutations). Kept in sync with ollama.modes.base.
 READ_TOOL_NAMES = frozenset(
-    {"list_dir", "tree", "read_text", "read_json", "web_search", "web_fetch"}
+    {
+        "list_dir",
+        "tree",
+        "read_text",
+        "read_json",
+        "web_search",
+        "web_fetch",
+        "open_chrome",
+    }
 )
 OAC_TOOL_NAMES = READ_TOOL_NAMES
 
@@ -392,9 +401,34 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "open_chrome",
+            "description": (
+                "Open an http(s) URL as a new tab in Google Chrome on this PC. "
+                "Use when the user asks to open, show, or pull up a page/link in the browser."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Absolute http(s) URL to open",
+                    },
+                    "new_tab": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Open in a new tab (default true).",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_tools",
             "description": (
-                "List the AINet tool catalog (DB ops + web_search/web_fetch). "
+                "List the AINet tool catalog (DB ops + web_search/web_fetch/open_chrome). "
                 "Call this when you need a tool that is not in your current lean set; "
                 "after calling, the full catalog is unlocked for later tool calls "
                 "(OAC stays read-only + web)."
@@ -604,6 +638,10 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
         "web_fetch": lambda **kw: web_fetch(
             kw["url"],
             max_chars=int(kw.get("max_chars", 4000)),
+        ),
+        "open_chrome": lambda **kw: open_chrome(
+            kw["url"],
+            new_tab=bool(kw["new_tab"]) if "new_tab" in kw else True,
         ),
         "file_by_id": lambda **kw: file_by_id_mod.file_by_id(
             db,

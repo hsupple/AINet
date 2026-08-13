@@ -68,6 +68,11 @@ class ConversationStore:
             return sid
         return self.new_session(mode_id=mode_id, topic=topic)
 
+    def session_exists(self, session_id: str | None) -> bool:
+        if not session_id:
+            return False
+        return (self.sessions_dir / f"{session_id}.json").exists()
+
     def append_turn(
         self,
         session_id: str,
@@ -77,6 +82,10 @@ class ConversationStore:
         mode_id: str,
         topic: str | None = None,
     ) -> dict[str, Any]:
+        # Heal after db reset / deleted runtime while the chat process is still up.
+        if not self.session_exists(session_id):
+            session_id = self.new_session(mode_id=mode_id, topic=topic)
+
         data = self.load_session(session_id)
         turn = {
             "ts": _utc_now(),

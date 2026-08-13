@@ -8,7 +8,6 @@ from typing import Any
 from ainet.tools import changelog
 from ainet.tools.ops import DatabaseTools
 from ainet.defaults import load_default_for_path
-from ollama.content_filing import is_ephemeral_text
 from ollama.dest_resolver import resolve_dest
 
 _TOPIC_FILES = ("Notes.json", "History.json", "Read.json", "Schedule.json")
@@ -69,12 +68,6 @@ def file_note(
     folder = resolve_dest(db, dest_raw, user_text=user_text)
 
     if folder == "discard":
-        if not is_ephemeral_text(user_text):
-            return {
-                "ok": False,
-                "error": "dest=discard refused — turn has lasting content; pick a real dest and write a note",
-                "entry_id": eid,
-            }
         return {
             "ok": True,
             "action": "discard",

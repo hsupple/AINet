@@ -8,188 +8,358 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --ink: #0e1a17;
-      --panel: rgba(18, 36, 32, 0.72);
-      --line: rgba(214, 232, 220, 0.14);
-      --text: #e7f2ea;
-      --muted: #9bb5a8;
-      --accent: #d4a24c;
-      --accent-dim: rgba(212, 162, 76, 0.18);
-      --user: #1f3d34;
-      --bot: rgba(255, 255, 255, 0.04);
-      --danger: #e08a6a;
+      --bg: #f3f4f1;
+      --bg-elev: #ffffff;
+      --ink: #121412;
+      --muted: #6a726c;
+      --line: #e2e6e1;
+      --line-strong: #cfd6cf;
+      --accent: #0c8f55;
+      --accent-soft: rgba(12, 143, 85, 0.10);
+      --user: #121412;
+      --danger: #c2472c;
+      --ok: #0c8f55;
+      --warn: #b7791f;
+      --tool: #3d6b8f;
+      --radius: 14px;
+      --shadow: 0 1px 0 rgba(18, 20, 18, 0.04), 0 10px 30px rgba(18, 20, 18, 0.04);
     }
 
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body {
-      font-family: "Sora", sans-serif;
-      color: var(--text);
+      font-family: "Figtree", sans-serif;
+      color: var(--ink);
       background:
-        radial-gradient(1200px 700px at 10% -10%, rgba(212, 162, 76, 0.18), transparent 55%),
-        radial-gradient(900px 600px at 100% 0%, rgba(62, 140, 118, 0.22), transparent 50%),
-        linear-gradient(165deg, #07110e 0%, #122822 45%, #0a1613 100%);
-      background-attachment: fixed;
+        linear-gradient(180deg, #eef1ec 0%, var(--bg) 40%, #ebeee9 100%);
+      -webkit-font-smoothing: antialiased;
     }
 
     .shell {
-      max-width: 1360px;
+      max-width: 1280px;
       height: 100%;
       margin: 0 auto;
-      padding: 1.25rem 1rem 1rem;
+      padding: 1rem 1rem 0.85rem;
       display: grid;
       grid-template-rows: auto 1fr auto;
-      gap: 0.85rem;
-    }
-
-    .workspace {
-      min-height: 0;
-      display: grid;
-      grid-template-columns: minmax(0, 1.05fr) minmax(380px, 1fr);
-      gap: 0.85rem;
-    }
-    @media (max-width: 900px) {
-      .workspace {
-        grid-template-columns: 1fr;
-        grid-template-rows: minmax(0, 1fr) minmax(280px, 42vh);
-      }
+      gap: 0.75rem;
     }
 
     header {
       display: flex;
-      align-items: end;
+      align-items: center;
       justify-content: space-between;
       gap: 1rem;
+      padding: 0.15rem 0.1rem 0.85rem;
       border-bottom: 1px solid var(--line);
-      padding-bottom: 0.75rem;
     }
 
     .brand {
-      font-family: "Instrument Serif", serif;
-      font-size: clamp(2.2rem, 6vw, 3.4rem);
-      line-height: 0.95;
-      letter-spacing: -0.02em;
       margin: 0;
+      font-family: "Syne", sans-serif;
+      font-weight: 700;
+      font-size: 1.55rem;
+      letter-spacing: -0.04em;
+      line-height: 1;
     }
-
-    .brand span {
+    .brand em {
+      font-style: normal;
       color: var(--accent);
-      font-style: italic;
     }
-
-    .meta {
-      text-align: right;
-      font-size: 0.78rem;
-      color: var(--muted);
-      line-height: 1.45;
-    }
-
-    .meta strong { color: var(--text); font-weight: 500; }
 
     .toolbar {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.45rem;
+      gap: 0.4rem;
       margin-top: 0.55rem;
     }
 
     button, select {
       font: inherit;
-      font-size: 0.78rem;
-      color: var(--text);
-      background: var(--accent-dim);
-      border: 1px solid var(--line);
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--ink);
+      background: var(--bg-elev);
+      border: 1px solid var(--line-strong);
       border-radius: 999px;
-      padding: 0.35rem 0.75rem;
+      padding: 0.4rem 0.8rem;
       cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
     }
-    button:hover, select:hover { border-color: var(--accent); }
-    button:disabled { opacity: 0.5; cursor: wait; }
+    button:hover, select:hover { border-color: #9aa89f; }
+    button:disabled { opacity: 0.45; cursor: wait; }
     #soi {
       background: var(--accent);
-      color: var(--ink);
-      border: none;
+      color: #fff;
+      border-color: transparent;
       font-weight: 600;
     }
-    #soi.running { opacity: 1; }
-    #voice.off {
-      opacity: 0.65;
-      background: transparent;
+    #soi:hover { background: #0a7a48; }
+
+    .meta {
+      text-align: right;
+      font-size: 0.75rem;
+      color: var(--muted);
+      line-height: 1.45;
+      font-variant-numeric: tabular-nums;
     }
+    .meta strong { color: var(--ink); font-weight: 600; }
     #soi-state {
       display: inline-flex;
       align-items: center;
       gap: 0.35rem;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      font-size: 0.68rem;
+      font-weight: 600;
     }
     #soi-state::before {
       content: "";
-      width: 0.55rem;
-      height: 0.55rem;
+      width: 0.5rem;
+      height: 0.5rem;
       border-radius: 50%;
-      background: #6a8579;
+      background: #b0bab3;
     }
-    #soi-state.on {
-      color: #8ee0b0;
-    }
+    #soi-state.on { color: var(--ok); }
     #soi-state.on::before {
-      background: #5ee09a;
-      box-shadow: 0 0 0 0 rgba(94, 224, 154, 0.7);
-      animation: soi-pulse 1.2s ease-out infinite;
+      background: var(--ok);
+      box-shadow: 0 0 0 0 rgba(12, 143, 85, 0.45);
+      animation: pulse 1.3s ease-out infinite;
     }
-    @keyframes soi-pulse {
-      0% { box-shadow: 0 0 0 0 rgba(94, 224, 154, 0.55); }
-      100% { box-shadow: 0 0 0 8px rgba(94, 224, 154, 0); }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(12, 143, 85, 0.4); }
+      100% { box-shadow: 0 0 0 8px rgba(12, 143, 85, 0); }
+    }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.85fr);
+      gap: 0.75rem;
+    }
+    @media (max-width: 900px) {
+      .workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1fr) minmax(260px, 40vh);
+      }
+    }
+
+    .chat-pane, .soi-panel {
+      min-height: 0;
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: calc(var(--radius) + 2px);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
     }
 
     #log {
+      flex: 1;
+      min-height: 0;
       overflow-y: auto;
-      padding: 0.25rem 0.15rem 0.5rem;
+      padding: 1.1rem 1.15rem 1.25rem;
       display: flex;
       flex-direction: column;
-      gap: 0.7rem;
+      gap: 0.9rem;
       scroll-behavior: smooth;
-      min-height: 0;
     }
 
-    .soi-panel {
-      min-height: 0;
+    .msg {
+      max-width: min(92%, 680px);
+      animation: rise 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .msg.user { align-self: flex-end; }
+    .msg.bot, .msg.sys { align-self: flex-start; }
+    .msg.sys { align-self: center; max-width: 100%; }
+
+    .msg-label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 0.35rem 0.15rem;
+    }
+    .msg.user .msg-label { text-align: right; margin-right: 0.15rem; }
+
+    .msg-body {
+      padding: 0.85rem 1rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      line-height: 1.55;
+      font-size: 0.96rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user .msg-body {
+      background: var(--user);
+      color: #f5f7f4;
+      border-color: transparent;
+    }
+    .msg.bot .msg-body {
+      background: #fafbf9;
+      border-color: var(--line);
+    }
+    .msg.sys .msg-body {
+      background: transparent;
+      border-style: dashed;
+      color: var(--muted);
+      font-size: 0.8rem;
+      padding: 0.45rem 0.75rem;
+      text-align: center;
+    }
+    .msg.error .msg-body {
+      color: var(--danger);
+      border-color: rgba(194, 71, 44, 0.35);
+      background: rgba(194, 71, 44, 0.05);
+    }
+
+    .msg-body.streaming::after {
+      content: "";
+      display: inline-block;
+      width: 0.42em;
+      height: 1.05em;
+      margin-left: 1px;
+      vertical-align: -0.15em;
+      background: var(--accent);
+      animation: caret 0.9s steps(1) infinite;
+    }
+    @keyframes caret {
+      50% { opacity: 0; }
+    }
+
+    .flow {
+      display: inline;
+      animation: flow-in 320ms ease-out both;
+    }
+    @keyframes flow-in {
+      from { opacity: 0; filter: blur(2px); transform: translateY(0.25em); }
+      to { opacity: 1; filter: none; transform: none; }
+    }
+
+    .tool-log {
       display: flex;
       flex-direction: column;
-      background: rgba(6, 14, 12, 0.72);
+      gap: 0.4rem;
+      margin: 0 0 0.55rem;
+    }
+
+    .tool-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 0.55rem;
+      align-items: start;
+      padding: 0.55rem 0.7rem;
+      border-radius: 10px;
       border: 1px solid var(--line);
-      border-radius: 1rem;
+      background: #f7f8f5;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 0.74rem;
+      line-height: 1.4;
+      animation: tool-in 380ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
       overflow: hidden;
     }
+    .tool-row.running {
+      border-color: rgba(12, 143, 85, 0.28);
+      background: linear-gradient(90deg, var(--accent-soft), #f7f8f5 55%);
+      background-size: 200% 100%;
+      animation: tool-in 380ms cubic-bezier(0.2, 0.85, 0.2, 1) both, shimmer 1.4s linear infinite;
+    }
+    .tool-row.ok { border-color: rgba(12, 143, 85, 0.22); }
+    .tool-row.fail {
+      border-color: rgba(194, 71, 44, 0.35);
+      background: rgba(194, 71, 44, 0.05);
+    }
+
+    .tool-dot {
+      width: 0.55rem;
+      height: 0.55rem;
+      margin-top: 0.28rem;
+      border-radius: 50%;
+      background: var(--tool);
+      flex-shrink: 0;
+    }
+    .tool-row.running .tool-dot {
+      background: transparent;
+      border: 1.5px solid var(--accent);
+      border-top-color: transparent;
+      animation: spin 0.65s linear infinite;
+    }
+    .tool-row.ok .tool-dot { background: var(--ok); }
+    .tool-row.fail .tool-dot { background: var(--danger); }
+
+    .tool-main { min-width: 0; }
+    .tool-name {
+      font-weight: 500;
+      color: var(--ink);
+      letter-spacing: -0.01em;
+    }
+    .tool-detail {
+      margin-top: 0.2rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .tool-status {
+      font-size: 0.64rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding-top: 0.15rem;
+    }
+    .tool-row.running .tool-status { color: var(--accent); }
+    .tool-row.ok .tool-status { color: var(--ok); }
+    .tool-row.fail .tool-status { color: var(--danger); }
+
+    @keyframes tool-in {
+      from { opacity: 0; transform: translateX(-10px) scale(0.98); max-height: 0; padding-top: 0; padding-bottom: 0; }
+      to { opacity: 1; transform: none; max-height: 200px; }
+    }
+    @keyframes shimmer {
+      0% { background-position: 100% 0; }
+      100% { background-position: -100% 0; }
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: none; }
+    }
+
     .soi-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 0.5rem;
-      padding: 0.55rem 0.75rem;
+      padding: 0.7rem 0.85rem;
       border-bottom: 1px solid var(--line);
       font-size: 0.72rem;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--muted);
+      font-weight: 600;
+      background: #fafbf9;
     }
-    .soi-head strong { color: var(--accent); font-weight: 600; text-transform: none; letter-spacing: 0; }
-    .soi-head-left {
-      display: flex;
-      align-items: center;
-      gap: 0.55rem;
-      min-width: 0;
+    .soi-head strong {
+      color: var(--ink);
+      font-weight: 700;
+      text-transform: none;
+      letter-spacing: -0.02em;
+      font-family: "Syne", sans-serif;
+      font-size: 0.95rem;
     }
+    .soi-head-left { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
     .soi-view {
       display: inline-flex;
       padding: 2px;
       border: 1px solid var(--line);
       border-radius: 999px;
-      background: rgba(0, 0, 0, 0.22);
+      background: var(--bg-elev);
     }
     .soi-view button {
       padding: 0.18rem 0.55rem;
@@ -199,19 +369,15 @@
       background: transparent;
       border: none;
       color: var(--muted);
-      border-radius: 999px;
     }
     .soi-view button.on {
-      background: var(--accent);
-      color: var(--ink);
+      background: var(--ink);
+      color: #fff;
       font-weight: 600;
     }
     .soi-view button:hover { border: none; }
-    .soi-body {
-      flex: 1;
-      min-height: 0;
-      position: relative;
-    }
+
+    .soi-body { flex: 1; min-height: 0; position: relative; }
     #soi-out, #soi-feed {
       position: absolute;
       inset: 0;
@@ -219,224 +385,153 @@
     }
     #soi-out {
       margin: 0;
-      padding: 0.7rem 0.8rem 0.9rem;
+      padding: 0.75rem 0.85rem;
       white-space: pre-wrap;
       word-break: break-word;
-      font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-      font-size: 0.74rem;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 0.72rem;
       line-height: 1.45;
-      color: #cfe6d8;
+      color: #2a332e;
+      background: #f7f8f5;
     }
     .soi-panel.view-panel #soi-out { display: none; }
     .soi-panel.view-raw #soi-feed { display: none; }
     #soi-out:empty::before,
     #soi-feed:empty::before {
-      content: "SOI output will stream here…";
+      content: "SOI activity will appear here…";
       color: var(--muted);
-      font-family: "Sora", sans-serif;
-      font-size: 0.74rem;
+      font-family: "Figtree", sans-serif;
+      font-size: 0.8rem;
     }
     #soi-feed {
       display: flex;
       flex-direction: column;
-      gap: 0.7rem;
-      padding: 0.85rem 0.85rem 1.1rem;
+      gap: 0.55rem;
+      padding: 0.85rem;
+      background: #fff;
     }
+
     .soi-card {
       display: flex;
       flex-direction: column;
-      gap: 0.55rem;
-      min-width: 0;
-      padding: 0.8rem 0.9rem 0.85rem;
+      gap: 0.4rem;
+      padding: 0.7rem 0.75rem;
       border: 1px solid var(--line);
-      border-left: 5px solid var(--tool, #6a8579);
-      border-radius: 0.85rem;
-      background: rgba(255, 255, 255, 0.045);
-      overflow: visible;
-      animation: rise 180ms ease-out;
+      border-left: 3px solid var(--tool, #6a726c);
+      border-radius: 10px;
+      background: #fafbf9;
+      animation: rise 220ms ease-out;
     }
-    .soi-card-rail { display: none; }
-    .soi-card-body {
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 0.55rem;
-      padding: 0;
-    }
+    .soi-card.pending { border-left-color: var(--accent); }
+    .soi-card.ok { border-left-color: var(--ok); }
+    .soi-card.fail, .soi-card.error-ev { border-left-color: var(--danger); }
+    .soi-card.phase { border-left-color: var(--ink); background: #f3f4f1; }
     .soi-card-top {
       display: flex;
-      align-items: center;
       justify-content: space-between;
-      gap: 0.65rem;
+      gap: 0.5rem;
+      align-items: center;
     }
     .soi-tool-badge {
-      font-size: 0.82rem;
-      font-weight: 600;
-      letter-spacing: 0.01em;
-      color: var(--tool, var(--accent));
-      font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--ink);
     }
     .soi-card-status {
-      flex: 0 0 auto;
-      font-size: 0.68rem;
-      letter-spacing: 0.08em;
+      font-size: 0.64rem;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
+      font-weight: 600;
       color: var(--muted);
     }
-    .soi-card.pending .soi-card-status {
-      color: #d4a24c;
-    }
+    .soi-card.pending .soi-card-status { color: var(--accent); }
     .soi-card.pending .soi-card-status::before {
       content: "";
       display: inline-block;
-      width: 0.5rem;
-      height: 0.5rem;
-      margin-right: 0.32rem;
+      width: 0.45rem;
+      height: 0.45rem;
+      margin-right: 0.3rem;
       border-radius: 50%;
-      border: 1.5px solid #d4a24c;
+      border: 1.5px solid var(--accent);
       border-top-color: transparent;
       vertical-align: -1px;
-      animation: soi-spin 0.7s linear infinite;
+      animation: spin 0.7s linear infinite;
     }
-    .soi-card.ok .soi-card-status { color: #8ee0b0; }
+    .soi-card.ok .soi-card-status { color: var(--ok); }
     .soi-card.fail .soi-card-status { color: var(--danger); }
-    .soi-card.fail { border-color: rgba(224, 138, 106, 0.45); }
     .soi-card-detail {
-      display: flex;
-      flex-direction: column;
-      gap: 0.35rem;
-      padding: 0.55rem 0.65rem;
-      border-radius: 0.55rem;
-      background: rgba(0, 0, 0, 0.28);
-      border: 1px solid rgba(214, 232, 220, 0.08);
+      padding: 0.45rem 0.55rem;
+      border-radius: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
     }
-    .soi-card-arg,
-    .soi-card-result,
-    .soi-card-hint,
-    .soi-phase-meta {
+    .soi-card-arg, .soi-card-result, .soi-card-hint, .soi-phase-meta {
       margin: 0;
-      font-size: 0.8rem;
-      line-height: 1.5;
-      color: #d7ebe0;
+      font-size: 0.76rem;
+      line-height: 1.45;
+      color: #3a433e;
       white-space: pre-wrap;
-      overflow-wrap: anywhere;
       word-break: break-word;
+      font-family: "IBM Plex Mono", monospace;
     }
     .soi-card-result {
-      color: #b8d4c6;
-      padding-top: 0.3rem;
-      border-top: 1px solid rgba(214, 232, 220, 0.1);
-    }
-    .soi-card.phase {
-      border-left-color: var(--accent);
-      background: var(--accent-dim);
-      border-color: rgba(212, 162, 76, 0.22);
+      margin-top: 0.35rem;
+      padding-top: 0.35rem;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
     }
     .soi-phase-label {
-      font-family: "Instrument Serif", serif;
-      font-size: 1.15rem;
-      line-height: 1.2;
-      color: var(--accent);
-    }
-    .soi-phase-meta {
-      color: var(--muted);
-    }
-    .soi-card.note { --tool: #6a8579; }
-    .soi-card.error-ev {
-      --tool: var(--danger);
-      border-color: rgba(224, 138, 106, 0.4);
-    }
-    @keyframes soi-spin {
-      to { transform: rotate(360deg); }
-    }
-    .tool-file_by_id { --tool: #d4a24c; }
-    .tool-write_json, .tool-create_json, .tool-patch_json, .tool-set_json_path { --tool: #e08a6a; }
-    .tool-create_cop, .tool-create_folder, .tool-move_path { --tool: #b388ff; }
-    .tool-read_json, .tool-read_text { --tool: #6ec8b8; }
-    .tool-list_dir, .tool-tree, .tool-get_tools { --tool: #8fbf7f; }
-    .tool-web_search, .tool-web_fetch { --tool: #7eb6ff; }
-    .tool-mark_read_stale, .tool-mark_read_refreshed { --tool: #5ec2c7; }
-    .tool-capture_inbox { --tool: #e0c07a; }
-    .tool-archive_to_history { --tool: #9aa7c2; }
-
-    .bubble {
-      max-width: min(92%, 640px);
-      padding: 0.85rem 1rem;
-      border-radius: 1rem;
-      border: 1px solid var(--line);
-      white-space: pre-wrap;
-      word-break: break-word;
-      line-height: 1.5;
+      font-family: "Syne", sans-serif;
       font-size: 0.95rem;
-      animation: rise 220ms ease-out;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--ink);
     }
-    .bubble.user {
-      align-self: flex-end;
-      background: var(--user);
-      border-color: rgba(212, 162, 76, 0.28);
-    }
-    .bubble.bot {
-      align-self: flex-start;
-      background: var(--bot);
-      backdrop-filter: blur(8px);
-    }
-    .bubble.sys {
-      align-self: center;
-      max-width: 100%;
-      font-size: 0.75rem;
-      color: var(--muted);
-      background: transparent;
-      border-style: dashed;
-      padding: 0.4rem 0.7rem;
-    }
-    .bubble.error { color: var(--danger); border-color: rgba(224, 138, 106, 0.4); }
-
-    @keyframes rise {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: none; }
-    }
+    .tool-file_note, .tool-file_by_id { --tool: #0c8f55; }
+    .tool-write_json, .tool-create_json, .tool-patch_json, .tool-set_json_path { --tool: #c2472c; }
+    .tool-web_search, .tool-web_fetch, .tool-open_chrome { --tool: #3d6b8f; }
+    .tool-read_json, .tool-read_text, .tool-list_dir, .tool-tree { --tool: #5a7d6a; }
 
     form {
       display: grid;
       grid-template-columns: 1fr auto;
-      gap: 0.55rem;
+      gap: 0.5rem;
       align-items: end;
-      background: var(--panel);
+      background: var(--bg-elev);
       border: 1px solid var(--line);
-      border-radius: 1.1rem;
+      border-radius: calc(var(--radius) + 2px);
       padding: 0.65rem;
-      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow);
     }
-
     textarea {
       width: 100%;
-      min-height: 3.2rem;
+      min-height: 3.1rem;
       max-height: 9rem;
       resize: vertical;
       font: inherit;
       font-size: 0.95rem;
-      color: var(--text);
+      color: var(--ink);
       background: transparent;
       border: none;
       outline: none;
       padding: 0.45rem 0.55rem;
       line-height: 1.45;
     }
-
     form button[type="submit"] {
       background: var(--accent);
-      color: var(--ink);
+      color: #fff;
       border: none;
       font-weight: 600;
-      padding: 0.7rem 1.1rem;
-      border-radius: 0.85rem;
+      padding: 0.7rem 1.15rem;
+      border-radius: 11px;
     }
-
+    form button[type="submit"]:hover { background: #0a7a48; }
     .hint {
       grid-column: 1 / -1;
       font-size: 0.7rem;
       color: var(--muted);
-      padding: 0 0.35rem 0.1rem;
+      padding: 0 0.35rem 0.05rem;
     }
   </style>
 </head>
@@ -444,11 +539,10 @@
   <div class="shell">
     <header>
       <div>
-        <h1 class="brand">AI<span>Net</span></h1>
+        <h1 class="brand">AI<em>Net</em></h1>
         <div class="toolbar">
           <select id="mode" title="Mode"></select>
           <button type="button" id="reset">New session</button>
-          <button type="button" id="voice" title="Speak replies with Qwen3-TTS" aria-pressed="true">Voice on</button>
           <button type="button" id="soi">Start SOI</button>
         </div>
       </div>
@@ -456,11 +550,13 @@
     </header>
 
     <div class="workspace">
-      <div id="log" aria-live="polite"></div>
+      <section class="chat-pane" aria-label="Chat">
+        <div id="log" aria-live="polite"></div>
+      </section>
       <aside class="soi-panel view-panel" id="soi-panel" aria-label="SOI output">
         <div class="soi-head">
           <div class="soi-head-left">
-            <span><strong>SOI</strong> live</span>
+            <span><strong>SOI</strong></span>
             <div class="soi-view" role="tablist" aria-label="SOI view">
               <button type="button" id="soi-view-panel" data-view="panel">Panel</button>
               <button type="button" id="soi-view-raw" data-view="raw">Raw</button>
@@ -476,9 +572,9 @@
     </div>
 
     <form id="form">
-      <textarea id="input" rows="2" placeholder="Talk to the local model…" autofocus></textarea>
+      <textarea id="input" rows="2" placeholder="Message…" autofocus></textarea>
       <button type="submit" id="send">Send</button>
-      <div class="hint">Turns persist via OAC → SOI idle filing into your db. Voice speaks each sentence as it streams. Enter to send · Shift+Enter for newline</div>
+      <div class="hint">Enter to send · Shift+Enter for newline · tools animate inline as they run</div>
     </form>
   </div>
 
@@ -496,71 +592,11 @@
     const soiState = document.getElementById("soi-state");
     const soiViewPanel = document.getElementById("soi-view-panel");
     const soiViewRaw = document.getElementById("soi-view-raw");
-    const voiceBtn = document.getElementById("voice");
     let busy = false;
     let lastSoiId = 0;
     const pendingTools = new Map();
-    let voiceOn = true;
-    try {
-      const saved = localStorage.getItem("ainet-voice");
-      if (saved === "0") voiceOn = false;
-    } catch (e) {}
-
-    const audioQueue = [];
-    let audioPlaying = false;
-    let audioUnlocked = false;
-
-    function setVoiceUi() {
-      voiceBtn.textContent = voiceOn ? "Voice on" : "Voice off";
-      voiceBtn.classList.toggle("off", !voiceOn);
-      voiceBtn.setAttribute("aria-pressed", voiceOn ? "true" : "false");
-    }
-    setVoiceUi();
-    voiceBtn.addEventListener("click", () => {
-      voiceOn = !voiceOn;
-      try { localStorage.setItem("ainet-voice", voiceOn ? "1" : "0"); } catch (e) {}
-      setVoiceUi();
-      if (!voiceOn) {
-        audioQueue.length = 0;
-        audioPlaying = false;
-      }
-    });
-
-    function unlockAudio() {
-      if (audioUnlocked) return;
-      try {
-        const a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=");
-        a.volume = 0.01;
-        const p = a.play();
-        if (p && typeof p.then === "function") p.catch(() => {});
-        audioUnlocked = true;
-      } catch (e) {}
-    }
-
-    function enqueueAudio(b64, mime) {
-      if (!voiceOn || !b64) return;
-      audioQueue.push({ b64, mime: mime || "audio/wav" });
-      pumpAudio();
-    }
-
-    function pumpAudio() {
-      if (audioPlaying || !audioQueue.length) return;
-      audioPlaying = true;
-      const item = audioQueue.shift();
-      const url = "data:" + item.mime + ";base64," + item.b64;
-      const audio = new Audio(url);
-      const done = () => {
-        audioPlaying = false;
-        pumpAudio();
-      };
-      audio.addEventListener("ended", done);
-      audio.addEventListener("error", done);
-      const p = audio.play();
-      if (p && typeof p.then === "function") p.catch(done);
-    }
 
     const SOI_VIEW_KEY = "ainet-soi-view";
-
     function setSoiView(view) {
       const mode = view === "raw" ? "raw" : "panel";
       soiPanel.classList.toggle("view-panel", mode === "panel");
@@ -587,6 +623,10 @@
           const val = Array.isArray(args[key]) ? args[key].join(", ") : String(args[key]);
           return key + "=" + val;
         }
+        try {
+          const raw = JSON.stringify(args);
+          return raw.length > 160 ? raw.slice(0, 160) + "…" : raw;
+        } catch (e) {}
       }
       if (row.summary) return String(row.summary);
       if (row.preview) {
@@ -633,7 +673,7 @@
     }
 
     function fillDetail(el, arg, result) {
-      const body = el.querySelector(".soi-card-body");
+      const body = el.querySelector(".soi-card-body") || el;
       let detail = el.querySelector(".soi-card-detail");
       const hasArg = !!(arg && String(arg).trim());
       const hasResult = !!(result && String(result).trim() && String(result).trim() !== String(arg || "").trim());
@@ -671,9 +711,9 @@
           '<div class="soi-card-detail"><p class="soi-phase-meta"></p></div>' +
         "</div>";
       el.querySelector(".soi-phase-label").textContent = copy.title;
-      const meta = copy.meta.replace(/^\(SOI\s+/i, "").replace(/\)$/, "");
+      const metaText = String(copy.meta || "").replace(/^\(SOI\s+/i, "").replace(/\)$/, "");
       const metaEl = el.querySelector(".soi-phase-meta");
-      if (meta) metaEl.textContent = meta;
+      if (metaText) metaEl.textContent = metaText;
       else metaEl.parentElement.remove();
       soiFeed.appendChild(el);
     }
@@ -759,26 +799,104 @@
       return String(v);
     }
 
-    function addBubble(text, kind) {
-      const el = document.createElement("div");
-      el.className = "bubble " + kind;
-      el.textContent = asText(text);
-      if (!el.textContent) return el;
-      logEl.appendChild(el);
+    function addMessage(text, kind) {
+      const wrap = document.createElement("div");
+      wrap.className = "msg " + kind;
+      if (kind === "user" || kind === "bot") {
+        const label = document.createElement("div");
+        label.className = "msg-label";
+        label.textContent = kind === "user" ? "You" : "OAC";
+        wrap.appendChild(label);
+      }
+      if (kind === "bot") {
+        const tools = document.createElement("div");
+        tools.className = "tool-log";
+        tools.hidden = true;
+        wrap.appendChild(tools);
+        wrap._tools = tools;
+        wrap._pendingTools = new Map();
+      }
+      const body = document.createElement("div");
+      body.className = "msg-body";
+      const content = asText(text);
+      if (content) body.textContent = content;
+      wrap.appendChild(body);
+      wrap._body = body;
+      if (!content && kind !== "bot") return wrap;
+      logEl.appendChild(wrap);
       logEl.scrollTop = logEl.scrollHeight;
-      return el;
+      return wrap;
+    }
+
+    function addBubble(text, kind) {
+      return addMessage(text, kind);
+    }
+
+    function appendFlow(body, delta) {
+      if (!delta) return;
+      const span = document.createElement("span");
+      span.className = "flow";
+      span.textContent = delta;
+      body.appendChild(span);
+      body.classList.add("streaming");
+    }
+
+    function chatToolStart(msg, row) {
+      if (!msg || !msg._tools) return;
+      msg._tools.hidden = false;
+      const name = row.name || "tool";
+      const el = document.createElement("div");
+      el.className = "tool-row running " + toolClass(name);
+      const detail = hintFromRow(row);
+      el.innerHTML =
+        '<span class="tool-dot"></span>' +
+        '<div class="tool-main"><div class="tool-name"></div><div class="tool-detail"></div></div>' +
+        '<span class="tool-status">run</span>';
+      el.querySelector(".tool-name").textContent = name;
+      const detailEl = el.querySelector(".tool-detail");
+      if (detail) detailEl.textContent = detail;
+      else detailEl.remove();
+      el.dataset.arg = detail;
+      msg._tools.appendChild(el);
+      const stack = msg._pendingTools.get(name) || [];
+      stack.push(el);
+      msg._pendingTools.set(name, stack);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function chatToolDone(msg, row) {
+      if (!msg || !msg._pendingTools) return;
+      const name = row.name || "tool";
+      const stack = msg._pendingTools.get(name) || [];
+      let el = stack.pop();
+      const ok = row.ok !== false;
+      if (!el) {
+        chatToolStart(msg, row);
+        el = (msg._pendingTools.get(name) || []).pop();
+      }
+      if (!el) return;
+      el.classList.remove("running");
+      el.classList.add(ok ? "ok" : "fail");
+      const status = el.querySelector(".tool-status");
+      if (status) status.textContent = ok ? "ok" : "fail";
+      const detailEl = el.querySelector(".tool-detail") || (() => {
+        const d = document.createElement("div");
+        d.className = "tool-detail";
+        el.querySelector(".tool-main").appendChild(d);
+        return d;
+      })();
+      const arg = el.dataset.arg || hintFromRow(row);
+      const summary = row.summary || "";
+      detailEl.textContent = [arg, summary].filter(Boolean).join("\n→ ");
+      logEl.scrollTop = logEl.scrollHeight;
     }
 
     function renderMeta(s) {
-      const ttsBit = s.tts_enabled
-        ? (s.tts_healthy ? "<br>voice ready" : "<br>voice offline")
-        : "";
       meta.innerHTML =
         "<strong>" + (s.model || "?") + "</strong><br>" +
         "mode " + (s.mode || "?") +
         (s.session_id ? "<br>session " + s.session_id.slice(0, 8) : "") +
-        (s.soi_running ? "<br>SOI running" : "<br>SOI idle") +
-        ttsBit;
+        (s.soi_running ? "<br>SOI running" : "<br>SOI idle");
       if (Array.isArray(s.modes) && modeSel.options.length === 0) {
         for (const m of s.modes) {
           const opt = document.createElement("option");
@@ -863,11 +981,11 @@
       return r.json();
     }
 
-    async function streamChat(message, voice, botEl, onDone) {
+    async function streamChat(message, botMsg, onDone) {
       const r = await fetch("/api/chat-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, voice: !!voice }),
+        body: JSON.stringify({ message, voice: false }),
       });
       if (!r.ok || !r.body) {
         throw new Error("chat-stream failed (" + r.status + ")");
@@ -875,35 +993,40 @@
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
-      let el = botEl || null;
       let full = "";
       let donePayload = null;
       let err = null;
+      const body = botMsg._body;
 
       const handleEvent = (ev) => {
         if (!ev || typeof ev !== "object") return;
-        if (ev.type === "token") {
+        if (ev.type === "tool_start") {
+          chatToolStart(botMsg, ev);
+        } else if (ev.type === "tool_done") {
+          chatToolDone(botMsg, ev);
+        } else if (ev.type === "token") {
           const t = asText(ev.text);
           if (!t) return;
-          if (!el) el = addBubble("", "bot");
-          if (el.classList.contains("sys")) el.classList.remove("sys");
+          if (body.classList.contains("sys")) {
+            body.classList.remove("sys");
+            body.textContent = "";
+          }
+          if (!full && body.textContent === "…") body.textContent = "";
           full += t;
-          el.textContent = full;
+          appendFlow(body, t);
           logEl.scrollTop = logEl.scrollHeight;
-        } else if (ev.type === "audio") {
-          enqueueAudio(ev.audio_base64, ev.mime || "audio/wav");
-        } else if (ev.type === "tts_error") {
-          addBubble("Voice: " + asText(ev.error || "TTS error"), "sys");
         } else if (ev.type === "done") {
           donePayload = ev;
-          if (!el) el = addBubble(asText(ev.reply) || "(empty reply)", "bot");
-          else if (ev.reply && !full) {
-            el.classList.remove("sys");
-            el.textContent = asText(ev.reply);
+          body.classList.remove("streaming");
+          if (!full) {
+            const reply = asText(ev.reply) || "(empty reply)";
+            body.textContent = reply;
+            full = reply;
           }
           if (typeof onDone === "function") onDone();
         } else if (ev.type === "error") {
           err = asText(ev.error || "Error");
+          body.classList.remove("streaming");
           if (typeof onDone === "function") onDone();
         }
       };
@@ -924,6 +1047,7 @@
           catch (e) {}
         }
       }
+      body.classList.remove("streaming");
       if (err) throw new Error(err);
       return donePayload || { ok: true, reply: full };
     }
@@ -934,10 +1058,10 @@
       if (!text || busy) return;
       busy = true;
       sendBtn.disabled = true;
-      unlockAudio();
-      addBubble(text, "user");
+      addMessage(text, "user");
       input.value = "";
-      const botEl = addBubble("…", "bot sys");
+      const botMsg = addMessage("…", "bot");
+      botMsg._body.classList.add("sys");
       const unlockSend = () => {
         if (!busy) return;
         busy = false;
@@ -945,15 +1069,15 @@
         input.focus();
       };
       try {
-        const data = await streamChat(text, voiceOn, botEl, unlockSend);
+        const data = await streamChat(text, botMsg, unlockSend);
         if (data && data.ok === false) {
-          botEl.classList.add("error");
-          botEl.textContent = data.error || "Error";
+          botMsg.classList.add("error");
+          botMsg._body.textContent = data.error || "Error";
         } else if (data) renderMeta(data);
       } catch (err) {
-        botEl.classList.add("error");
-        botEl.classList.remove("sys");
-        botEl.textContent = String(err);
+        botMsg.classList.add("error");
+        botMsg._body.classList.remove("sys");
+        botMsg._body.textContent = String(err);
       } finally {
         unlockSend();
         refreshStatus();
@@ -970,41 +1094,44 @@
     document.getElementById("reset").addEventListener("click", async () => {
       const data = await post("/api/reset", {});
       if (data.ok) {
-        addBubble("New OAC session", "sys");
+        addMessage("New OAC session", "sys");
         renderMeta(data);
       }
     });
 
     soiBtn.addEventListener("click", async () => {
       setSoiUi(true);
-      const kick = { event: "idle_wake", phase: "filing", text: "Starting SOI…" };
-      soiOut.textContent += (soiOut.textContent ? "\n" : "") + kick.text;
-      appendSoiCard(kick);
-      soiOut.scrollTop = soiOut.scrollHeight;
-      soiFeed.scrollTop = soiFeed.scrollHeight;
       try {
         const data = await post("/api/soi", {});
         if (!data.ok) {
-          soiOut.textContent += "\n" + asText(data.error || data.reason || "SOI failed to start");
+          addMessage(asText(data.error || data.reason || "SOI failed to start"), "sys");
           setSoiUi(false);
           return;
         }
         if (data.started === false) {
-          soiOut.textContent += "\n" + asText(data.reason || "SOI already running");
+          addMessage(asText(data.reason || "SOI not started"), "sys");
+          setSoiUi(!!data.soi_running);
+          return;
+        }
+        const pending = Number(data.pending_changelog || 0);
+        if (pending === 0) {
+          addMessage("SOI started — Changelog empty, nothing to file yet.", "sys");
+        } else {
+          addMessage("SOI started — " + pending + " pending changelog entr" + (pending === 1 ? "y" : "ies") + ".", "sys");
         }
         appendSoiLines(data.soi_log || data.lines || []);
         setSoiUi(!!(data.soi_running || data.started));
       } catch (err) {
-        soiOut.textContent += "\n" + asText(err);
+        addMessage(asText(err), "sys");
         setSoiUi(false);
       }
     });
 
     modeSel.addEventListener("change", async () => {
       const data = await post("/api/mode", { mode: modeSel.value });
-      if (!data.ok) addBubble(data.error || "Mode change failed", "sys error");
+      if (!data.ok) addMessage(data.error || "Mode change failed", "sys error");
       else {
-        addBubble("Mode → " + data.mode, "sys");
+        addMessage("Mode → " + data.mode, "sys");
         renderMeta(data);
       }
     });

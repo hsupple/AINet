@@ -32,12 +32,12 @@ class OllamaConfig:
     # Dual-AI
     persist_oac_conversation: bool = True
     soi_enabled: bool = True
-    # Phase 1: wake SOI filing when OAC quiet this long
-    soi_idle_seconds: float = 45.0
+    # Phase 1: wake SOI filing when OAC quiet this long (3 minutes)
+    soi_idle_seconds: float = 180.0
     # Phase 2: refresh Read.json after filing clear + this long OAC idle
     soi_read_refresh_idle_seconds: float = 600.0
-    # Inline Qwen3-TTS (ainet/tts_server.py on :8765)
-    tts_enabled: bool = True
+    # Inline Qwen3-TTS (ainet/tts_server.py on :8765) — off by default
+    tts_enabled: bool = False
     tts_url: str = "http://127.0.0.1:8765"
     tts_language: str = "English"
     tts_timeout_s: float = 120.0
@@ -62,11 +62,11 @@ class OllamaConfig:
             persist_oac_conversation=os.environ.get("AINET_PERSIST_OAC", "1")
             not in {"0", "false", "False"},
             soi_enabled=os.environ.get("AINET_SOI_ENABLED", "1") not in {"0", "false", "False"},
-            soi_idle_seconds=float(os.environ.get("AINET_SOI_IDLE_SECONDS", "45")),
+            soi_idle_seconds=float(os.environ.get("AINET_SOI_IDLE_SECONDS", "180")),
             soi_read_refresh_idle_seconds=float(
                 os.environ.get("AINET_SOI_READ_REFRESH_IDLE_SECONDS", "600")
             ),
-            tts_enabled=os.environ.get("AINET_TTS_ENABLED", "1") not in {"0", "false", "False"},
+            tts_enabled=os.environ.get("AINET_TTS_ENABLED", "0") not in {"0", "false", "False"},
             tts_url=os.environ.get("AINET_TTS_URL", "http://127.0.0.1:8765").rstrip("/"),
             tts_language=os.environ.get("AINET_TTS_LANGUAGE", "English"),
             tts_timeout_s=float(os.environ.get("AINET_TTS_TIMEOUT", "120")),

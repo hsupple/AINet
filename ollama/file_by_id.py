@@ -11,7 +11,6 @@ from ainet.tools.ops import DatabaseTools
 from ollama.content_filing import (
     content_kind,
     cop_name_in_text,
-    is_ephemeral_text,
 )
 from ollama.topics import record_personal_filing
 
@@ -129,29 +128,10 @@ def file_by_id(
             "entry_ids": ids,
         }
     if dest_norm in {"discard", "ephemeral", "drop"}:
-        lasting: list[str] = []
-        ephemeral: list[str] = []
-        for eid in ids:
-            entry = changelog.get_entry(db.paths, eid)
-            user, _asst = _entry_text(entry or {})
-            if is_ephemeral_text(user):
-                ephemeral.append(eid)
-            else:
-                lasting.append(eid)
-        if lasting:
-            return {
-                "ok": False,
-                "error": (
-                    "dest=discard refused — these turns have lasting content "
-                    f"({', '.join(lasting)}). Use create_cop / write_json / a Folderrules leaf. "
-                    "discard is only for hi/thanks/gg."
-                ),
-                "entry_ids": lasting,
-            }
         return {
             "ok": True,
             "action": "discard",
-            "entry_ids": ephemeral,
+            "entry_ids": ids,
             "note": "Host will archive these to Masterlog.json and drop them from the Changelog queue.",
         }
 

@@ -22,7 +22,6 @@ from ollama.config import OllamaConfig
 from ollama.idle import IdleSOIWatcher
 from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
 from ollama.session import ChatSession
-from ollama.tts import SpeechPipeline, TtsClient, TtsConfig
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
@@ -31,6 +30,7 @@ class ChatApp:
     def __init__(self, config: OllamaConfig, mode_id: str = DEFAULT_MODE_ID) -> None:
         self.config = config
         self.lock = threading.RLock()
+        self._ask_lock = threading.Lock()
         self._soi_seq = 0
         self.soi_log: deque[dict[str, Any]] = deque(maxlen=500)
         self._raw_seq = 0
@@ -91,33 +91,15 @@ class ChatApp:
         with self.lock:
             return [row for row in self.soi_log if int(row.get("id") or 0) > after_id]
 
-    def _tts_client(self) -> TtsClient:
-        return TtsClient(
-            TtsConfig(
-                url=self.config.tts_url,
-                enabled=self.config.tts_enabled,
-                language=self.config.tts_language,
-                timeout_s=self.config.tts_timeout_s,
-            )
-        )
+    def _tts_client(self) -> None:
+        return None
 
     def tts_status(self) -> dict[str, Any]:
-        client = self._tts_client()
-        healthy = False
-        if self.config.tts_enabled:
-            # Short probe; cache briefly so /api/status stays snappy.
-            now = time.monotonic()
-            cached = getattr(self, "_tts_health_cache", None)
-            if cached and now - cached[0] < 5.0:
-                healthy = cached[1]
-            else:
-                healthy = client.healthy()
-                self._tts_health_cache = (now, healthy)
         return {
-            "tts_enabled": self.config.tts_enabled,
+            "tts_enabled": False,
             "tts_url": self.config.tts_url,
             "tts_language": self.config.tts_language,
-            "tts_healthy": healthy,
+            "tts_healthy": False,
         }
 
     def status(self) -> dict[str, Any]:
@@ -150,83 +132,78 @@ class ChatApp:
         text = (text or "").strip()
         if not text:
             return {"ok": False, "error": "Empty message"}
-        with self.lock:
-            try:
+        try:
+            # Do not hold self.lock across Ollama inference — SOI status/logs need it.
+            with self._ask_lock:
                 reply = self.session.ask(text)
-            except OllamaError as exc:
-                return {"ok": False, "error": str(exc)}
             self._append_raw(source="oac", user=text, reply=reply, model=self.config.model)
-            return {
-                "ok": True,
-                "reply": reply,
-                "mode": self.session.mode.id,
-                "session_id": self.session.session_id,
-                "soi_running": self.watcher.running,
-                **self.tts_status(),
-            }
+            with self.lock:
+                payload = {
+                    "ok": True,
+                    "reply": reply,
+                    "mode": self.session.mode.id,
+                    "session_id": self.session.session_id,
+                    "soi_running": self.watcher.running,
+                }
+            payload.update(self.tts_status())
+            return payload
+        except OllamaError as exc:
+            return {"ok": False, "error": str(exc)}
 
-    def ask_stream(self, text: str, *, voice: bool = True) -> Iterator[dict[str, Any]]:
-        """Yield SSE payloads: token / audio / tts_error / done / error."""
+    def ask_stream(self, text: str, *, voice: bool = False) -> Iterator[dict[str, Any]]:
+        """Yield SSE payloads: token / tool_* / done / error. Voice/TTS is disabled."""
         text = (text or "").strip()
         if not text:
             yield {"type": "error", "error": "Empty message"}
             return
 
         events: queue.Queue[dict[str, Any] | None] = queue.Queue()
-        want_voice = bool(voice) and self.config.tts_enabled
-        client = self._tts_client()
-        pipe: SpeechPipeline | None = None
-
-        if want_voice:
-            if not client.healthy():
-                events.put(
-                    {
-                        "type": "tts_error",
-                        "error": f"TTS server not reachable at {self.config.tts_url}",
-                    }
-                )
-                want_voice = False
-            else:
-                def _on_audio(b64: str, sr: int, seq: int, spoken: str) -> None:
-                    events.put(
-                        {
-                            "type": "audio",
-                            "audio_base64": b64,
-                            "sample_rate": sr,
-                            "seq": seq,
-                            "text": spoken,
-                            "mime": "audio/wav",
-                        }
-                    )
-
-                def _on_tts_err(err: str) -> None:
-                    events.put({"type": "tts_error", "error": err})
-
-                pipe = SpeechPipeline(
-                    client,
-                    on_audio_b64=_on_audio,
-                    on_error=_on_tts_err,
-                    enabled=True,
-                )
+        _ = voice  # API compat; TTS removed from chat
 
         def _on_token(delta: str) -> None:
             if not delta:
                 return
             events.put({"type": "token", "text": delta})
-            if pipe is not None:
-                pipe.feed(delta)
+
+        def _on_tool(phase: str, name: str, detail: dict[str, Any]) -> None:
+            detail = detail or {}
+            if phase == "start":
+                events.put(
+                    {
+                        "type": "tool_start",
+                        "name": name,
+                        "arguments": detail.get("arguments") or {},
+                    }
+                )
+            elif phase == "done":
+                events.put(
+                    {
+                        "type": "tool_done",
+                        "name": name,
+                        "ok": bool(detail.get("ok", True)),
+                        "summary": detail.get("summary") or "",
+                    }
+                )
 
         def _run() -> None:
             reply = ""
             try:
-                with self.lock:
-                    reply = self.session.ask(text, stream=True, on_token=_on_token)
-                    self._append_raw(
-                        source="oac",
-                        user=text,
-                        reply=reply,
-                        model=self.config.model,
+                # Keep ChatApp.lock free during inference so /api/status and SOI logs
+                # do not freeze while Ollama (or SOI) is busy.
+                with self._ask_lock:
+                    reply = self.session.ask(
+                        text,
+                        stream=True,
+                        on_token=_on_token,
+                        on_tool=_on_tool,
                     )
+                self._append_raw(
+                    source="oac",
+                    user=text,
+                    reply=reply,
+                    model=self.config.model,
+                )
+                with self.lock:
                     done_payload = {
                         "type": "done",
                         "ok": True,
@@ -234,22 +211,15 @@ class ChatApp:
                         "mode": self.session.mode.id,
                         "session_id": self.session.session_id,
                         "soi_running": self.watcher.running,
-                        "voice": bool(pipe is not None),
-                        **self.tts_status(),
+                        "voice": False,
                     }
-                # Unlock the UI as soon as the model finishes — don't wait on TTS.
+                done_payload.update(self.tts_status())
                 events.put(done_payload)
             except OllamaError as exc:
                 events.put({"type": "error", "error": str(exc)})
             except Exception as exc:
                 events.put({"type": "error", "error": str(exc)})
             finally:
-                if pipe is not None:
-                    try:
-                        # Keep this short so a hung TTS server cannot pin the stream open.
-                        pipe.close(timeout=20.0)
-                    except Exception:
-                        pass
                 events.put(None)
 
         threading.Thread(target=_run, name="ainet-chat-stream", daemon=True).start()
@@ -276,12 +246,17 @@ class ChatApp:
             return {"ok": True, **self.status()}
 
     def run_soi(self) -> dict[str, Any]:
+        from ainet.tools import changelog as changelog_mod
+        from ainet.tools.paths import DbPaths
+
+        pending = len(changelog_mod.pending_oac_entries(DbPaths(self.config.db_root)))
         kicked = self.watcher.request_run()
         with self.lock:
             return {
                 "ok": True,
                 "started": bool(kicked.get("started")),
                 "reason": kicked.get("reason") or "",
+                "pending_changelog": pending,
                 **self.status(),
             }
 
@@ -420,9 +395,6 @@ def make_handler(app: ChatApp):
                 self._send(status, body, ctype)
                 return
             if path == "/api/chat-stream":
-                voice = data.get("voice")
-                if voice is None:
-                    voice = True
                 self.send_response(200)
                 self._cors()
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -433,7 +405,7 @@ def make_handler(app: ChatApp):
                 try:
                     for event in app.ask_stream(
                         str(data.get("message") or ""),
-                        voice=bool(voice),
+                        voice=False,
                     ):
                         blob = json.dumps(event, ensure_ascii=False)
                         self.wfile.write(f"data: {blob}\n\n".encode("utf-8"))
@@ -474,8 +446,7 @@ def serve(
         f"AINet web  http://{host}:{port}/  "
         f"(LAN: use this machine's IP, e.g. http://192.168.x.x:{port}/)\n"
         f"model={config.model}  mode={mode_id}  db={config.db_root}  "
-        f"soi_file={config.soi_idle_seconds:.0f}s  "
-        f"tts={'on' if config.tts_enabled else 'off'}@{config.tts_url}",
+        f"soi_file={config.soi_idle_seconds:.0f}s",
         flush=True,
     )
     try:

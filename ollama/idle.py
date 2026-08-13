@@ -53,11 +53,22 @@ class IdleSOIWatcher:
         return True
 
     def request_run(self) -> dict[str, bool | str]:
-        """Kick filing now (does not wait). Used by the :1111 Start SOI button."""
+        """Request filing when OAC idle threshold is met (used by Start SOI)."""
         if not self.start(force=True):
             return {"started": False, "reason": "watcher failed to start"}
         if self.busy:
             return {"started": False, "reason": "already running"}
+        idle = self.session.idle_seconds()
+        need = float(self.config.soi_idle_seconds)
+        if idle < need:
+            left = need - idle
+            return {
+                "started": False,
+                "reason": (
+                    f"OAC must be idle {need:.0f}s before SOI "
+                    f"(now {idle:.0f}s, {left:.0f}s left)"
+                ),
+            }
         self._active.set()
         self._kick.set()
         return {"started": True}
@@ -91,8 +102,10 @@ class IdleSOIWatcher:
                     self._kick.set()
                 continue
             try:
-                if kicked or (
-                    worker.has_filing_work() and idle >= self.config.soi_idle_seconds
+                # Filing only after OAC idle threshold — kicks cannot bypass this.
+                if (
+                    worker.has_filing_work()
+                    and idle >= self.config.soi_idle_seconds
                 ):
                     logger.log(
                         "idle_wake",
@@ -118,6 +131,16 @@ class IdleSOIWatcher:
                             seconds=self.error_backoff_s,
                             reason="filing produced no placements",
                         )
+                    continue
+
+                if kicked and worker.has_filing_work() and idle < self.config.soi_idle_seconds:
+                    logger.log(
+                        "filing_skip",
+                        reason=(
+                            f"waiting for OAC idle "
+                            f"({idle:.0f}s / {self.config.soi_idle_seconds:.0f}s)"
+                        ),
+                    )
                     continue
 
                 if (
