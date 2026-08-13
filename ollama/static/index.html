@@ -495,6 +495,9 @@
     }
     .soi-panel.view-panel #soi-out { display: none; }
     .soi-panel.view-raw #soi-feed { display: none; }
+    .soi-panel.view-doc #soi-out,
+    .soi-panel.view-doc #soi-feed { display: none; }
+    .soi-panel:not(.view-doc) #doc-preview { display: none; }
     #soi-out:empty::before,
     #soi-feed:empty::before {
       content: "SOI activity will appear here…";
@@ -502,6 +505,74 @@
       font-family: "Figtree", sans-serif;
       font-size: 0.8rem;
     }
+    #doc-preview {
+      position: absolute;
+      inset: 0;
+      overflow-y: auto;
+      padding: 1rem 1.05rem 1.25rem;
+      background:
+        radial-gradient(120% 80% at 50% -20%, rgba(255, 255, 255, 0.95), transparent 55%),
+        #f7f8f5;
+    }
+    #doc-preview:empty::before {
+      content: "Deep Research briefs appear here after save…";
+      color: var(--muted);
+      font-family: "Figtree", sans-serif;
+      font-size: 0.8rem;
+    }
+    .doc-meta {
+      font-size: 0.72rem;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin: 0 0 0.55rem;
+    }
+    .doc-title {
+      font-family: "Syne", sans-serif;
+      font-size: 1.25rem;
+      letter-spacing: -0.03em;
+      margin: 0 0 0.65rem;
+      line-height: 1.25;
+      color: var(--ink);
+    }
+    .doc-summary {
+      font-size: 0.9rem;
+      color: #3a453e;
+      margin: 0 0 1rem;
+      line-height: 1.5;
+    }
+    .doc-body.md {
+      font-size: 0.9rem;
+      line-height: 1.55;
+      color: #1d2620;
+    }
+    .doc-body.md h1, .doc-body.md h2, .doc-body.md h3 {
+      font-family: "Syne", sans-serif;
+      letter-spacing: -0.02em;
+      margin: 1.1rem 0 0.45rem;
+    }
+    .doc-body.md h1 { font-size: 1.15rem; }
+    .doc-body.md h2 { font-size: 1.05rem; }
+    .doc-body.md h3 { font-size: 0.98rem; }
+    .doc-body.md p { margin: 0.45rem 0; }
+    .doc-body.md ul, .doc-body.md ol { margin: 0.4rem 0 0.6rem 1.1rem; }
+    .doc-sources {
+      margin-top: 1.15rem;
+      padding-top: 0.85rem;
+      border-top: 1px solid var(--line);
+    }
+    .doc-sources h3 {
+      font-family: "Syne", sans-serif;
+      font-size: 0.95rem;
+      margin: 0 0 0.5rem;
+    }
+    .doc-sources ol {
+      margin: 0;
+      padding-left: 1.15rem;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+    .doc-sources a { color: #0f6b45; }
     #soi-feed {
       display: flex;
       flex-direction: column;
@@ -620,7 +691,7 @@
     }
     .tool-file_note, .tool-file_by_id { --tool: #0c8f55; }
     .tool-write_json, .tool-create_json, .tool-patch_json, .tool-set_json_path { --tool: #c2472c; }
-    .tool-web_search, .tool-web_fetch, .tool-open_chrome { --tool: #3d6b8f; }
+    .tool-web_search, .tool-web_fetch, .tool-open_chrome, .tool-save_research { --tool: #3d6b8f; }
     .tool-read_json, .tool-read_text, .tool-list_dir, .tool-tree { --tool: #5a7d6a; }
 
     form {
@@ -693,13 +764,14 @@
       <section class="chat-pane" aria-label="Chat">
         <div id="log" aria-live="polite"></div>
       </section>
-      <aside class="soi-panel view-panel" id="soi-panel" aria-label="SOI output">
+      <aside class="soi-panel view-panel" id="soi-panel" aria-label="SOI and Doc">
         <div class="soi-head">
           <div class="soi-head-left">
-            <span><strong>SOI</strong></span>
-            <div class="soi-view" role="tablist" aria-label="SOI view">
-              <button type="button" id="soi-view-panel" data-view="panel">Panel</button>
+            <span id="side-label"><strong>SOI</strong></span>
+            <div class="soi-view" role="tablist" aria-label="Right panel view">
+              <button type="button" id="soi-view-panel" data-view="panel">SOI</button>
               <button type="button" id="soi-view-raw" data-view="raw">Raw</button>
+              <button type="button" id="soi-view-doc" data-view="doc">Doc</button>
             </div>
           </div>
           <span id="soi-state">Idle</span>
@@ -707,6 +779,7 @@
         <div class="soi-body">
           <div id="soi-feed"></div>
           <pre id="soi-out"></pre>
+          <div id="doc-preview" aria-label="Research document preview"></div>
         </div>
       </aside>
     </div>
@@ -736,24 +809,170 @@
     const soiState = document.getElementById("soi-state");
     const soiViewPanel = document.getElementById("soi-view-panel");
     const soiViewRaw = document.getElementById("soi-view-raw");
+    const soiViewDoc = document.getElementById("soi-view-doc");
+    const docPreview = document.getElementById("doc-preview");
+    const sideLabel = document.getElementById("side-label");
     let busy = false;
     let chatAbort = null;
     let lastSoiId = 0;
     const pendingTools = new Map();
 
+    function isExternalHttpUrl(href) {
+      try {
+        const u = new URL(href, window.location.href);
+        return u.protocol === "http:" || u.protocol === "https:";
+      } catch (e) {
+        return false;
+      }
+    }
+
+    async function openUrlInChrome(href) {
+      const url = String(href || "").trim();
+      if (!url || !isExternalHttpUrl(url)) return false;
+      try {
+        const data = await post("/api/open-chrome", { url });
+        return !!(data && data.ok);
+      } catch (e) {
+        return false;
+      }
+    }
+
+    // pywebview / in-app navigation: force http(s) links into system Chrome.
+    document.addEventListener("click", (e) => {
+      const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      if (!a) return;
+      const href = a.getAttribute("href") || "";
+      if (!isExternalHttpUrl(href)) return;
+      // Keep same-origin app routes (status pages etc.) in-app.
+      try {
+        const u = new URL(href, window.location.href);
+        if (u.origin === window.location.origin) return;
+      } catch (err) {}
+      e.preventDefault();
+      e.stopPropagation();
+      openUrlInChrome(href);
+    }, true);
+
     const SOI_VIEW_KEY = "ainet-soi-view";
     function setSoiView(view) {
-      const mode = view === "raw" ? "raw" : "panel";
+      const mode = view === "raw" ? "raw" : (view === "doc" ? "doc" : "panel");
       soiPanel.classList.toggle("view-panel", mode === "panel");
       soiPanel.classList.toggle("view-raw", mode === "raw");
+      soiPanel.classList.toggle("view-doc", mode === "doc");
       soiViewPanel.classList.toggle("on", mode === "panel");
       soiViewRaw.classList.toggle("on", mode === "raw");
+      soiViewDoc.classList.toggle("on", mode === "doc");
+      if (sideLabel) {
+        sideLabel.innerHTML = mode === "doc" ? "<strong>Doc</strong>" : "<strong>SOI</strong>";
+      }
       try { localStorage.setItem(SOI_VIEW_KEY, mode); } catch (e) {}
     }
     try { setSoiView(localStorage.getItem(SOI_VIEW_KEY) || "panel"); }
     catch (e) { setSoiView("panel"); }
     soiViewPanel.addEventListener("click", () => setSoiView("panel"));
     soiViewRaw.addEventListener("click", () => setSoiView("raw"));
+    soiViewDoc.addEventListener("click", () => setSoiView("doc"));
+
+    function escapeHtml(s) {
+      return String(s || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderDocBrief(brief) {
+      if (!docPreview) return;
+      if (!brief) {
+        docPreview.innerHTML = "";
+        return;
+      }
+      const title = escapeHtml(brief.title || "Research brief");
+      const summary = escapeHtml(brief.summary || "");
+      const when = escapeHtml(brief.created_at || brief.updated_at || "");
+      let bodyHtml = "";
+      try {
+        if (window.marked && window.DOMPurify) {
+          // Escape currency so KaTeX won't treat $500 as math.
+          const rawBody = String(brief.body || "").replace(/\$(\d[\d,]*(?:\.\d+)?)/g, "\\$$$1");
+          const { text: protectedText, chunks } = extractMath(rawBody);
+          bodyHtml = DOMPurify.sanitize(
+            restoreMathPlaceholders(marked.parse(protectedText, { breaks: true }), chunks),
+            { USE_PROFILES: { html: true }, ADD_ATTR: ["target", "rel"] }
+          );
+        } else {
+          bodyHtml = "<pre class='plain'>" + escapeHtml(brief.body || "") + "</pre>";
+        }
+      } catch (e) {
+        bodyHtml = "<pre class='plain'>" + escapeHtml(brief.body || "") + "</pre>";
+      }
+      const findings = Array.isArray(brief.key_findings) ? brief.key_findings : [];
+      let findingsHtml = "";
+      if (findings.length) {
+        findingsHtml = "<ul>" + findings.map((f) => "<li>" + escapeHtml(f) + "</li>").join("") + "</ul>";
+      }
+      const sources = Array.isArray(brief.sources) ? brief.sources : [];
+      let sourcesHtml = "";
+      if (sources.length) {
+        sourcesHtml = "<div class='doc-sources'><h3>Sources</h3><ol>" + sources.map((s) => {
+          const label = escapeHtml(s.title || s.url || "source");
+          const url = escapeHtml(s.url || "");
+          const pub = escapeHtml([s.publisher, s.year].filter(Boolean).join(" · "));
+          const note = escapeHtml(s.note || "");
+          return "<li><a href=\"" + url + "\" target=\"_blank\" rel=\"noopener\">" + label + "</a>"
+            + (pub ? " <span style='color:var(--muted)'>(" + pub + ")</span>" : "")
+            + (note ? "<div style='color:var(--muted)'>" + note + "</div>" : "")
+            + "</li>";
+        }).join("") + "</ol></div>";
+      }
+      docPreview.innerHTML =
+        "<div class='doc-meta'>Deep Research" + (when ? " · " + when : "") + "</div>" +
+        "<h2 class='doc-title'>" + title + "</h2>" +
+        (summary ? "<p class='doc-summary'>" + summary + "</p>" : "") +
+        (findingsHtml ? "<div class='doc-body md'><h3>Key findings</h3>" + findingsHtml + "</div>" : "") +
+        "<div class='doc-body md'>" + bodyHtml + "</div>" +
+        sourcesHtml;
+      docPreview.querySelectorAll('a[href^="http"]').forEach((a) => {
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noopener noreferrer");
+      });
+      try {
+        if (window.renderMathInElement) {
+          renderMathInElement(docPreview, {
+            delimiters: [
+              { left: "$$", right: "$$", display: true },
+              { left: "\\[", right: "\\]", display: true },
+              { left: "\\(", right: "\\)", display: false },
+            ],
+            throwOnError: false,
+          });
+        }
+      } catch (e) {}
+    }
+
+    async function loadResearchBrief(opts) {
+      opts = opts || {};
+      try {
+        let url = "/api/research/current";
+        if (opts.id || opts.path) {
+          const q = new URLSearchParams();
+          if (opts.id) q.set("id", opts.id);
+          if (opts.path) q.set("path", opts.path);
+          url = "/api/research/get?" + q.toString();
+        }
+        const r = await fetch(url);
+        const data = await r.json();
+        if (data && data.ok && data.brief) {
+          renderDocBrief(data.brief);
+          if (opts.activate !== false) setSoiView("doc");
+          return data.brief;
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    // Prefill Doc pane without stealing focus from SOI.
+    loadResearchBrief({ activate: false }).catch(() => {});
 
     function toolClass(name) {
       return "tool-" + String(name || "tool").replace(/[^a-zA-Z0-9_]/g, "_");
@@ -773,7 +992,16 @@
       web_search: "Web search",
       web_fetch: "Open page",
       open_chrome: "Open in Chrome",
+      save_research: "Save research",
+      inspect_research: "Inspect research",
       create_cop: "Create content",
+      create_project: "Create project",
+      list_projects: "List projects",
+      open_project: "Open project",
+      close_project: "Close project",
+      write_text: "Write text",
+      create_folder: "Create folder",
+      move_path: "Rename / move",
     };
 
     const ARG_LABELS = {
@@ -860,13 +1088,19 @@
 
     function formatArgsObject(args) {
       if (!args || typeof args !== "object") return "";
-      const preferred = ["dest", "path", "folder_path", "query", "url", "title", "entry_id", "entry_ids", "slug", "note", "text", "kind"];
+      const preferred = [
+        "title", "dest", "path", "folder_path", "query", "url",
+        "entry_id", "entry_ids", "slug", "note", "text", "kind", "summary",
+      ];
       for (const key of preferred) {
         if (args[key] == null || args[key] === "") continue;
+        // Skip huge blobs on the tool card.
+        if (key === "body" || key === "sources" || key === "key_findings") continue;
         return formatArgPair(key, args[key]);
       }
       for (const key of Object.keys(args)) {
         if (args[key] == null || args[key] === "") continue;
+        if (key === "body" || key === "sources" || key === "key_findings" || key === "data") continue;
         return formatArgPair(key, args[key]);
       }
       return "";
@@ -1125,11 +1359,21 @@
         return "@@MATH" + i + "@@";
       };
       let s = String(src || "");
+      // Protect currency like $500 / $1,000 / $424.99 so KaTeX doesn't eat prices.
       s = s.replace(/\\\$/g, "@@DOLLAR@@");
+      s = s.replace(/\$(\d[\d,]*(?:\.\d+)?)/g, "@@CUR$$$1@@");
       s = s.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => push(tex, true));
       s = s.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => push(tex, false));
       s = s.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) => push(tex, true));
-      s = s.replace(/\$([^$\n]+?)\$/g, (_, tex) => push(tex, false));
+      // Only treat $...$ as math when it doesn't look like leftover currency noise.
+      s = s.replace(/\$([^$\n]{1,80}?)\$/g, (full, tex) => {
+        const t = String(tex || "").trim();
+        if (!t) return full;
+        if (/^\d/.test(t)) return full; // still price-like
+        if (/https?:\/\//i.test(t)) return full;
+        return push(tex, false);
+      });
+      s = s.replace(/@@CUR\$(\d[\d,]*(?:\.\d+)?)@@/g, "$$$1");
       s = s.replace(/@@DOLLAR@@/g, "\\$");
       return { text: s, chunks };
     }
@@ -1174,12 +1418,15 @@
           USE_PROFILES: { html: true },
           ADD_ATTR: ["target", "rel"],
         });
+        body.querySelectorAll('a[href^="http"]').forEach((a) => {
+          a.setAttribute("target", "_blank");
+          a.setAttribute("rel", "noopener noreferrer");
+        });
         if (typeof renderMathInElement === "function") {
           renderMathInElement(body, {
             delimiters: [
               { left: "$$", right: "$$", display: true },
               { left: "\\[", right: "\\]", display: true },
-              { left: "$", right: "$", display: false },
               { left: "\\(", right: "\\)", display: false },
             ],
             throwOnError: false,
@@ -1235,7 +1482,6 @@
       const name = row.name || "tool";
       const el = document.createElement("div");
       el.className = "tool-row running " + toolClass(name);
-      const detail = hintFromRow(row);
       el.innerHTML =
         '<span class="tool-dot"></span>' +
         '<div class="tool-main"><div class="tool-name"></div><div class="tool-detail"></div></div>' +
@@ -1243,9 +1489,13 @@
       el.querySelector(".tool-name").textContent = toolLabel(name);
       el.querySelector(".tool-status").textContent = statusLabel("running");
       const detailEl = el.querySelector(".tool-detail");
+      let detail = hintFromRow(row);
+      if (!detail && name === "save_research") detail = "Saving brief…";
+      if (!detail && name === "web_fetch") detail = "Reading page…";
+      if (!detail && name === "web_search") detail = "Searching…";
       if (detail) detailEl.textContent = detail;
       else detailEl.remove();
-      el.dataset.arg = detail;
+      el.dataset.arg = detail || "";
       msg._tools.appendChild(el);
       const stack = msg._pendingTools.get(name) || [];
       stack.push(el);
@@ -1284,6 +1534,7 @@
       meta.innerHTML =
         "<strong>" + (s.model || "?") + "</strong><br>" +
         "mode " + (s.mode || "?") +
+        (s.project_name ? "<br>project " + s.project_name : "") +
         (s.session_id ? "<br>session " + s.session_id.slice(0, 8) : "") +
         (s.soi_running ? "<br>SOI running" : "<br>SOI idle");
       if (Array.isArray(s.modes) && modeSel.options.length === 0) {
@@ -1405,6 +1656,10 @@
           chatToolStart(botMsg, ev);
         } else if (ev.type === "tool_done") {
           chatToolDone(botMsg, ev);
+          if (ev.name === "save_research" && ev.ok) {
+            const meta = ev.research || {};
+            loadResearchBrief({ id: meta.id, path: meta.path });
+          }
         } else if (ev.type === "token") {
           const t = asText(ev.text);
           if (!t) return;

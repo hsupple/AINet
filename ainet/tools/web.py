@@ -18,9 +18,99 @@ _MAX_SEARCH_COUNT = 8
 _TITLE_MAX = 120
 _SNIPPET_MAX = 280
 _FETCH_DEFAULT_CHARS = 4000
-_FETCH_MAX_CHARS = 8000
+_FETCH_MAX_CHARS = 12000
 _FETCH_BYTE_CAP = 500_000
 _HTTP_TIMEOUT_S = 20.0
+
+# Higher rank = more preferred for Deep Research. Not medical-only —
+# societies, publishers, preprint servers, and gov/edu labs across fields.
+_ACADEMIC_HOST_SCORES: tuple[tuple[str, int], ...] = (
+    # Indexes / libraries
+    ("ieeexplore.ieee.org", 100),
+    ("ieee.org", 95),
+    ("dl.acm.org", 100),
+    ("acm.org", 95),
+    ("arxiv.org", 90),
+    ("pubmed.ncbi.nlm.nih.gov", 100),
+    ("pmc.ncbi.nlm.nih.gov", 100),
+    ("ncbi.nlm.nih.gov", 95),
+    ("nih.gov", 90),
+    ("nist.gov", 90),
+    ("nasa.gov", 85),
+    ("energy.gov", 80),
+    ("osti.gov", 85),
+    ("cdc.gov", 85),
+    ("who.int", 80),
+    ("cochrane.org", 90),
+    # Societies
+    ("aps.org", 90),
+    ("acs.org", 90),
+    ("asme.org", 90),
+    ("sae.org", 80),
+    ("aiaa.org", 85),
+    ("siam.org", 90),
+    ("ams.org", 85),
+    ("iet.org", 85),
+    ("theiet.org", 85),
+    ("usenix.org", 85),
+    ("nips.cc", 85),
+    ("neurips.cc", 85),
+    ("openreview.net", 80),
+    ("ssrn.com", 70),
+    # Journals / publishers
+    ("nature.com", 90),
+    ("science.org", 90),
+    ("pnas.org", 90),
+    ("cell.com", 85),
+    ("nejm.org", 85),
+    ("thelancet.com", 85),
+    ("jamanetwork.com", 85),
+    ("bmj.com", 80),
+    ("sciencedirect.com", 80),
+    ("elsevier.com", 75),
+    ("springer.com", 80),
+    ("springeropen.com", 75),
+    ("wiley.com", 75),
+    ("tandfonline.com", 75),
+    ("sagepub.com", 70),
+    ("oup.com", 80),
+    ("academic.oup.com", 85),
+    ("cambridge.org", 80),
+    ("iop.org", 85),
+    ("iopscience.iop.org", 85),
+    ("aip.org", 85),
+    ("royalsocietypublishing.org", 80),
+    ("frontiersin.org", 65),
+    ("plos.org", 70),
+    ("physiology.org", 70),
+    ("acsm.org", 65),
+    ("mdpi.com", 50),
+)
+
+
+def _host_academic_score(url: str) -> int:
+    host = urllib.parse.urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    score = 0
+    for suffix, pts in _ACADEMIC_HOST_SCORES:
+        if host == suffix or host.endswith("." + suffix):
+            score = max(score, pts)
+    if host.endswith(".gov") or host.endswith(".edu") or host.endswith(".ac.uk"):
+        score = max(score, 50)
+    if host.startswith("ieeexplore.") or ".ieee.org" in host:
+        score = max(score, 95)
+    if host.startswith("dl.acm.") or host.endswith(".acm.org"):
+        score = max(score, 95)
+    return score
+
+
+def _prefer_academic(results: list[dict[str, str]]) -> list[dict[str, str]]:
+    scored: list[tuple[int, int, dict[str, str]]] = []
+    for i, row in enumerate(results):
+        scored.append((-_host_academic_score(row.get("url") or ""), i, row))
+    scored.sort()
+    return [row for _, _, row in scored]
 
 
 def _api_key() -> str:
@@ -166,6 +256,7 @@ def web_search(query: str, count: int = _DEFAULT_SEARCH_COUNT) -> dict[str, Any]
             continue
         results.append({"title": title, "url": link, "snippet": snippet})
 
+    results = _prefer_academic(results)
     return {
         "ok": True,
         "query": q,

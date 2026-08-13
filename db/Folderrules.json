@@ -8,7 +8,7 @@
     "Changelog.json",
     "Masterlog.json"
   ],
-  "immutable_roots": ["Hayden", "School", "Work", "Household"],
+  "immutable_roots": ["Hayden", "School", "Work", "Household", "Projects"],
   "naming": {
     "folder": "^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$",
     "json_file": "^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}\\.json$",
@@ -61,13 +61,14 @@
       "School/History",
       "Work/Projects",
       "Work/History",
+      "Projects",
       "Household/Pantry",
       "Household/Maintenance",
       "Household/History"
     ],
     "nested_under_project": true,
     "nested_under_hayden": true,
-    "notes": "Under Hayden/ the AI may create any depth of personal folders/files. Under Work/Projects/<Project>/ the AI may create additional subfolders when needed."
+    "notes": "Under Hayden/ the AI may create any depth of personal folders/files. New user projects MUST use create_project (Projects/<Name>/ with Read/History/Notes/Plan/Profile) — never a bare create_folder. Under Work/Projects/<Project>/ and inside a focused Projects/<Name>/ the AI may add subfolders and text files. Deep Research briefs live in db/runtime/research/ (host-only; inspect_research only)."
   },
   "hayden_map": {
     "Identity": "Core self, sides, personality, voice, boundaries",
@@ -97,6 +98,15 @@
       "Plan.json",
       "Decisions.json",
       "Open Questions.json",
+      "History.json",
+      "History/",
+      "Files/"
+    ],
+    "user_project": [
+      "Profile.json",
+      "Read.json",
+      "Notes.json",
+      "Plan.json",
       "History.json",
       "History/",
       "Files/"

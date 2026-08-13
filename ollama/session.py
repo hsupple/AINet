@@ -9,7 +9,13 @@ from collections.abc import Callable
 from typing import Any
 
 from ainet.tools.ops import DatabaseTools
-from ainet.tools.registry import catalog_tools, dispatch, tools_subset
+from ainet.tools.project import (
+    find_project,
+    resolve_project_rename_dest,
+    resolve_under_project,
+    user_project_name_from_path,
+)
+from ainet.tools.registry import PROJECT_SESSION_TOOLS, catalog_tools, dispatch, tools_subset
 from ollama.client import OllamaCancelled, OllamaClient, ThinkingCallback, TokenCallback
 from ollama.content_filing import cop_name_in_text
 from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
@@ -26,11 +32,13 @@ ToolCallback = Callable[[str, str, dict[str, Any]], None]
 
 _MUTATING = {
     "write_json",
+    "write_text",
     "create_json",
     "patch_json",
     "set_json_path",
     "create_folder",
     "create_cop",
+    "create_project",
     "move_path",
     "archive_to_history",
     "append_changelog",
@@ -38,6 +46,16 @@ _MUTATING = {
     "file_by_id",
     "file_note",
 }
+
+_PATH_ARG_KEYS = (
+    "path",
+    "src",
+    "dest",
+    "folder_or_path",
+    "read_path",
+    "history_dir",
+    "source_path",
+)
 
 
 class ChatSession:
@@ -58,6 +76,8 @@ class ChatSession:
         self.auto_mode = self.config.auto_mode if auto_mode is None else auto_mode
         self.mode_locked = False
         self.full_tools_unlocked = False
+        self.project_root: str | None = None
+        self._project_prev_mode: str = "companion"
         self.messages: list[dict[str, Any]] = []
         self.last_activity = time.monotonic()
         self.persist_conversation = (
@@ -117,25 +137,55 @@ class ChatSession:
         return tools_subset(self.mode.tool_names)
 
     def _rebuild_system(self) -> None:
-        system: list[dict[str, Any]] = [{"role": "system", "content": self.mode.prompt}]
+        prompt = self.mode.prompt
+        if self.project_root:
+            prompt = (
+                f"{prompt}\n\nFocused project: {self.project_root}\n"
+                "All paths are relative to this folder unless already under it."
+            )
+        system: list[dict[str, Any]] = [{"role": "system", "content": prompt}]
         dialogue = [m for m in self.messages if m.get("role") != "system"]
         self.messages = system + dialogue
 
     def reset(self) -> None:
         self.messages = []
         self.full_tools_unlocked = False
+        self.project_root = None
+        self._project_prev_mode = "companion"
         if self.store and self.mode.role == "oac":
             self.session_id = self.store.new_session(mode_id=self.mode.id)
         self._rebuild_system()
         self.touch()
 
     def set_mode(self, mode_id: str, *, lock: bool = False) -> Mode:
+        if mode_id != "project" and self.project_root:
+            # Leaving project mode without close_project clears focus.
+            self.project_root = None
         self.mode = get_mode(mode_id)
         self.mode_locked = lock
         self.full_tools_unlocked = False
         self._rebuild_system()
         self.touch()
         return self.mode
+
+    def _maybe_autoroute(self, user_text: str) -> str | None:
+        if self.project_root:
+            return None
+        if not self.auto_mode or self.mode.role != "oac":
+            return None
+        decision = suggest_mode(user_text, self.mode.id)
+        explicit = decision.confidence >= 0.95
+        if self.mode_locked and not explicit:
+            return None
+        if (
+            decision.mode_id != self.mode.id
+            and decision.confidence >= self.config.auto_mode_min_confidence
+            and decision.mode_id != "soi"
+        ):
+            old = self.mode.id
+            self.set_mode(decision.mode_id, lock=False)
+            return f"(auto → {decision.mode_id}; was {old}; {decision.reason})"
+        return None
 
     def ask(
         self,
@@ -198,15 +248,20 @@ class ChatSession:
         extra_mutating = {
             "mark_read_stale",
             "mark_read_refreshed",
+            "save_research",
         }
-        soi_opts = (
-            {"temperature": 0, "num_predict": 900}
-            if self.mode.role == "soi"
-            else None
-        )
+        extra_opts = None
+        if self.mode.role == "soi":
+            extra_opts = {"temperature": 0, "num_predict": 900}
+        elif self.mode.id == "deep_research":
+            extra_opts = {"temperature": 0.2, "num_predict": 2800}
+        max_rounds = self.config.max_tool_rounds
+        if self.mode.id == "deep_research":
+            max_rounds = max(max_rounds, 16)
+            req_timeout = max(req_timeout, 360.0)
 
         try:
-            for _round in range(self.config.max_tool_rounds):
+            for _round in range(max_rounds):
                 if self.cancelled():
                     raise OllamaCancelled("Cancelled")
                 self._trim_history()
@@ -218,7 +273,7 @@ class ChatSession:
                         on_token=_token if on_token else None,
                         on_thinking=on_thinking,
                         timeout_s=req_timeout,
-                        options=soi_opts,
+                        options=extra_opts,
                         should_cancel=self.cancelled,
                     )
                 else:
@@ -227,7 +282,7 @@ class ChatSession:
                         tools=tools,
                         think=think,
                         timeout_s=req_timeout,
-                        options=soi_opts,
+                        options=extra_opts,
                     )
                 message = response.get("message") or {}
                 self.messages.append(message)
@@ -292,6 +347,7 @@ class ChatSession:
                     if (
                         name == "web_search"
                         and self.mode.role == "oac"
+                        and self.mode.id != "deep_research"
                         and isinstance(result, dict)
                         and result.get("ok")
                         and not result.get("duplicate")
@@ -315,15 +371,18 @@ class ChatSession:
                         self.full_tools_unlocked = True
                         tools = self._active_tools()
                     if on_tool:
-                        on_tool(
-                            "done",
-                            name,
-                            {
-                                "ok": bool(result.get("ok", True)),
-                                "summary": self._tool_result_summary(name, result),
-                            },
-                        )
-                    payload = self._truncate_tool_result(result)
+                        done_detail: dict[str, Any] = {
+                            "ok": bool(result.get("ok", True)),
+                            "summary": self._tool_result_summary(name, result),
+                        }
+                        if name == "save_research" and isinstance(result, dict) and result.get("ok"):
+                            done_detail["research"] = {
+                                "id": result.get("id"),
+                                "path": result.get("path"),
+                                "title": result.get("title"),
+                            }
+                        on_tool("done", name, done_detail)
+                    payload = self._truncate_tool_result(name, result)
                     self.messages.append(
                         {
                             "role": "tool",
@@ -432,10 +491,22 @@ class ChatSession:
             text = result.get("text") or ""
             return f"{len(text)} chars"
         if name == "open_chrome":
+            urls = result.get("urls")
+            if isinstance(urls, list) and urls:
+                n = len(urls)
+                return f"{n} tabs" if n != 1 else str(urls[0])[:80]
             url = str(result.get("url") or "")
             if url:
                 return url if len(url) <= 80 else url[:77] + "…"
             return "ok"
+        if name == "save_research":
+            path = str(result.get("path") or "")
+            return path or "saved"
+        if name == "inspect_research":
+            if result.get("action") == "list":
+                return f"{result.get('count', 0)} briefs"
+            brief = result.get("brief") if isinstance(result.get("brief"), dict) else {}
+            return str(brief.get("title") or brief.get("path") or "ok")
         if name in {"read_json", "read_text"}:
             path = result.get("path") or ""
             return path or "ok"
@@ -466,7 +537,7 @@ class ChatSession:
         return any(p in t for p in phrases)
 
     @staticmethod
-    def _pick_search_urls_to_open(query: str, results: list[Any], *, limit: int = 1) -> list[dict[str, str]]:
+    def _pick_search_urls_to_open(query: str, results: list[Any], *, limit: int = 3) -> list[dict[str, str]]:
         rows: list[dict[str, str]] = []
         for item in results:
             if not isinstance(item, dict):
@@ -507,68 +578,67 @@ class ChatSession:
         picks = self._pick_search_urls_to_open(
             str(search_result.get("query") or ""),
             results,
-            limit=1,
+            limit=3,
         )
         if not picks:
             return search_result
 
         from ainet.tools.browser import open_chrome
 
-        opened: list[dict[str, Any]] = []
+        # Skip URLs already opened this turn
+        fresh: list[dict[str, str]] = []
         for pick in picks:
             url = pick["url"]
-            tool_key = self._tool_call_key("open_chrome", {"url": url, "new_tab": True})
-            if tool_key in seen_tool_keys:
+            key_a = self._tool_call_key("open_chrome", {"url": url, "new_tab": True})
+            key_b = self._tool_call_key("open_chrome", {"url": url})
+            if key_a in seen_tool_keys or key_b in seen_tool_keys:
                 continue
-            if on_tool:
-                on_tool("start", "open_chrome", {"arguments": {"url": url, "new_tab": True}})
-            try:
-                chrome_result = open_chrome(url, new_tab=True)
-                ok = bool(chrome_result.get("ok", True))
-                err = None
-            except Exception as exc:  # noqa: BLE001 — surface to model/UI
-                chrome_result = {"ok": False, "opened": False, "url": url, "error": str(exc)}
-                ok = False
-                err = str(exc)
-            seen_tool_keys.add(tool_key)
-            seen_tool_keys.add(self._tool_call_key("open_chrome", {"url": url}))
-            self.last_tool_names.append("open_chrome")
-            if on_tool:
-                on_tool(
-                    "done",
-                    "open_chrome",
-                    {
-                        "ok": ok,
-                        "summary": err or self._tool_result_summary("open_chrome", chrome_result),
-                    },
-                )
-            if ok:
-                opened.append({"title": pick.get("title") or "", "url": url})
-
-        if not opened:
+            fresh.append(pick)
+        if not fresh:
             return search_result
 
+        urls = [p["url"] for p in fresh]
+        if on_tool:
+            on_tool(
+                "start",
+                "open_chrome",
+                {"arguments": {"urls": urls, "new_tab": True}},
+            )
+        try:
+            chrome_result = open_chrome(urls=urls, new_tab=True)
+            ok = bool(chrome_result.get("ok", True))
+            err = None
+        except Exception as exc:  # noqa: BLE001
+            chrome_result = {"ok": False, "opened": False, "urls": urls, "error": str(exc)}
+            ok = False
+            err = str(exc)
+
+        for url in urls:
+            seen_tool_keys.add(self._tool_call_key("open_chrome", {"url": url, "new_tab": True}))
+            seen_tool_keys.add(self._tool_call_key("open_chrome", {"url": url}))
+        self.last_tool_names.append("open_chrome")
+        if on_tool:
+            summary = err
+            if not summary:
+                n = int(chrome_result.get("count") or len(urls))
+                summary = f"{n} tabs" if n != 1 else urls[0]
+            on_tool(
+                "done",
+                "open_chrome",
+                {"ok": ok, "summary": summary},
+            )
+
+        if not ok:
+            return search_result
+
+        opened = [{"title": p.get("title") or "", "url": p["url"]} for p in fresh]
         out = dict(search_result)
         out["auto_opened"] = opened
         out["hint"] = (
-            "Host already opened the URL(s) in auto_opened in Chrome. "
-            "Tell Hayden what opened. Do not claim other tabs opened unless you call open_chrome."
+            f"Host already opened {len(opened)} URL(s) in Chrome (see auto_opened). "
+            "Do not claim other tabs opened unless you call open_chrome."
         )
         return out
-
-    def _maybe_autoroute(self, user_text: str) -> str | None:
-        if not self.auto_mode or self.mode_locked or self.mode.role != "oac":
-            return None
-        decision = suggest_mode(user_text, self.mode.id)
-        if (
-            decision.mode_id != self.mode.id
-            and decision.confidence >= self.config.auto_mode_min_confidence
-            and decision.mode_id != "soi"
-        ):
-            old = self.mode.id
-            self.set_mode(decision.mode_id, lock=False)
-            return f"(auto → {decision.mode_id}; was {old}; {decision.reason})"
-        return None
 
     def _trim_history(self) -> None:
         """Keep recent dialogue under a message/char budget without breaking tool sequences."""
@@ -578,6 +648,9 @@ class ChatSession:
 
         msg_limit = max(4, self.config.max_history_messages)
         char_limit = max(2000, int(getattr(self.config, "max_history_chars", 12000) or 12000))
+        if self.mode.id == "deep_research":
+            msg_limit = max(msg_limit, 28)
+            char_limit = max(char_limit, 36000)
 
         last_user = 0
         for i, m in enumerate(rest):
@@ -677,9 +750,14 @@ class ChatSession:
         # No clean user boundary — drop from the front until role changes past first item.
         return messages[1:]
 
-    def _truncate_tool_result(self, result: dict[str, Any]) -> dict[str, Any]:
+    def _truncate_tool_result(self, name: str, result: dict[str, Any]) -> dict[str, Any]:
         raw = json.dumps(result, ensure_ascii=False)
         limit = self.config.max_tool_result_chars
+        if self.mode.id == "deep_research":
+            if name == "web_fetch":
+                limit = max(limit, 9000)
+            elif name == "web_search":
+                limit = max(limit, 4000)
         if len(raw) <= limit:
             return result
         return {
@@ -707,22 +785,30 @@ class ChatSession:
         if not name:
             return {"ok": False, "error": "Tool call missing function name"}
 
+        name, args = self._prefer_create_project(name, args)
+
         if name in {"get_tools", "getTools"}:
             return catalog_tools(
                 detail=bool(args.get("detail", True)),
                 read_only=not self.mode.allow_mutations,
             )
 
+        if name in {"open_project", "close_project"}:
+            return self._handle_project_session_tool(name, args)
+
         if not self.mode.allow_mutations:
-            allowed = set(READ_TOOLS) | {"get_tools", "getTools"}
+            allowed = set(READ_TOOLS) | {"get_tools", "getTools"} | set(PROJECT_SESSION_TOOLS)
             if self.mode.tool_names:
                 allowed |= set(self.mode.tool_names)
-            if name not in allowed or name in _MUTATING:
+            # create_project is mutating but explicitly allowed as a session tool.
+            if name in PROJECT_SESSION_TOOLS:
+                pass
+            elif name not in allowed or name in _MUTATING:
                 return {
                     "ok": False,
                     "error": (
                         f"OAC cannot use tool '{name}'. "
-                        "Allowed: read/web. "
+                        "Allowed: read/web + create/open/close project. "
                         "SOI files lasting DB writes from the changelog after idle."
                     ),
                 }
@@ -731,6 +817,7 @@ class ChatSession:
             and self.mode.tool_names is not None
             and name not in self.mode.tool_names
             and name not in {"get_tools", "getTools"}
+            and name not in PROJECT_SESSION_TOOLS
         ):
             return {
                 "ok": False,
@@ -739,6 +826,20 @@ class ChatSession:
                     "Call get_tools to unlock the full catalog."
                 ),
             }
+
+        if self.project_root and name == "create_project":
+            return {
+                "ok": False,
+                "error": (
+                    f"Already focused on {self.project_root}. "
+                    "Call close_project before creating another project."
+                ),
+            }
+
+        try:
+            args = self._scope_tool_args(name, args)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
 
         if self.mode.role == "soi" and name in {"create_cop", "create_folder"}:
             path = str(args.get("path") or args.get("folder_path") or "")
@@ -754,9 +855,156 @@ class ChatSession:
                     }
 
         result = dispatch(self.db, name, args)
+        if name == "move_path" and self.project_root and result.get("ok"):
+            self._maybe_update_project_root_after_move(result)
         if self.mode.role == "soi":
             result = _redact_assistant_fields(result)
         return result
+
+    def _prefer_create_project(
+        self, name: str, args: dict[str, Any]
+    ) -> tuple[str, dict[str, Any]]:
+        """Start a user project via create_project, never create_folder/create_cop."""
+        if self.project_root or name == "create_project":
+            return name, args
+        if name not in {"create_folder", "create_cop"}:
+            return name, args
+        path = str(args.get("path") or args.get("folder_path") or args.get("name") or "")
+        extracted = user_project_name_from_path(path)
+        kind = str(args.get("kind") or args.get("cop_type") or "").strip().casefold()
+        if (
+            not extracted
+            and name == "create_cop"
+            and kind == "project"
+            and not path.replace("\\", "/").startswith("Work/")
+        ):
+            extracted = user_project_name_from_path(path) or (path.strip("/\\") or "")
+            if "/" in extracted.replace("\\", "/"):
+                extracted = ""
+        if not extracted:
+            return name, args
+        return "create_project", {
+            "name": extracted,
+            "summary": str(args.get("summary") or ""),
+        }
+
+    def _handle_project_session_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name == "close_project":
+            closed = self.project_root
+            if not closed:
+                return {"ok": True, "closed": None, "hint": "No project was focused."}
+            prev = self._project_prev_mode or "companion"
+            self.project_root = None
+            self.set_mode(prev, lock=False)
+            return {
+                "ok": True,
+                "closed": closed,
+                "mode": self.mode.id,
+                "hint": f"Left {closed}. Full db/ access restored ({self.mode.id}).",
+            }
+
+        # open_project
+        raw = str(args.get("name") or args.get("path") or "").strip()
+        if not raw:
+            return {"ok": False, "error": "open_project requires name (or path)"}
+        found = find_project(self.db, raw)
+        if not found:
+            return {
+                "ok": False,
+                "error": (
+                    f"Project not found: {raw!r}. "
+                    "Use list_projects or create_project first."
+                ),
+            }
+        if self.mode.id != "project":
+            self._project_prev_mode = self.mode.id
+        self.project_root = found
+        self.set_mode("project", lock=True)
+        # set_mode clears project_root when leaving project — re-apply after switch.
+        self.project_root = found
+        self._rebuild_system()
+        return {
+            "ok": True,
+            "path": found,
+            "name": found.rsplit("/", 1)[-1],
+            "mode": "project",
+            "hint": (
+                f"Focused on {found}. Only this folder is accessible until close_project. "
+                "Use '.' for list_dir/tree; bare filenames resolve inside the project."
+            ),
+        }
+
+    def _scope_tool_args(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if not self.project_root:
+            return args
+        if name in PROJECT_SESSION_TOOLS | {
+            "web_search",
+            "web_fetch",
+            "open_chrome",
+            "get_tools",
+            "getTools",
+            "save_research",
+            "inspect_research",
+        }:
+            return args
+
+        out = dict(args)
+        root = self.project_root
+
+        # Default list/tree to project root
+        if name in {"list_dir", "tree"}:
+            raw_path = out.get("path", ".")
+            if raw_path is None or str(raw_path).strip() in {"", ".", "./"}:
+                out["path"] = root
+                return out
+
+        # Renaming the project folder itself may target a Projects/<NewName> sibling.
+        if name == "move_path":
+            src_raw = str(out.get("src") or "").strip()
+            dest_raw = str(out.get("dest") or "").strip()
+            if src_raw:
+                out["src"] = resolve_under_project(root, src_raw, self.db)
+            if dest_raw:
+                if out.get("src") == root:
+                    sibling = resolve_project_rename_dest(root, dest_raw)
+                    if sibling is None:
+                        raise ValueError(
+                            "To rename the project folder, dest must be a new name "
+                            f"or Projects/<NewName> (still under Projects/). Got {dest_raw!r}."
+                        )
+                    out["dest"] = sibling
+                else:
+                    out["dest"] = resolve_under_project(root, dest_raw, self.db)
+            return out
+
+        for key in _PATH_ARG_KEYS:
+            if key not in out or out[key] is None:
+                continue
+            raw = str(out[key]).strip()
+            if not raw:
+                continue
+            if key == "path" and name in {"list_dir", "tree"} and raw in {".", "./"}:
+                out[key] = root
+                continue
+            out[key] = resolve_under_project(root, raw, self.db)
+        return out
+
+    def _maybe_update_project_root_after_move(self, result: dict[str, Any]) -> None:
+        """If the focused project folder itself was renamed, keep focus on the new path."""
+        if not self.project_root:
+            return
+        src = str(result.get("from") or "")
+        dest = str(result.get("to") or "")
+        if not src or not dest:
+            return
+        root = self.project_root
+        if src == root or root.startswith(src + "/"):
+            # Renamed project root or an ancestor path segment
+            if src == root:
+                self.project_root = dest
+            else:
+                self.project_root = dest + root[len(src) :]
+            self._rebuild_system()
 
     def _soi_source_text(self) -> str:
         parts: list[str] = []

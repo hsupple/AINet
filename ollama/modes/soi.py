@@ -14,6 +14,7 @@ MODE = Mode(
         "tree",
         "read_json",
         "create_cop",
+        "create_project",
         "create_folder",
         "write_json",
         "patch_json",

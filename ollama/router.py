@@ -22,6 +22,24 @@ _PLANNER = re.compile(
     r")\b",
     re.I,
 )
+_OPEN_PROJECT = re.compile(
+    r"\b("
+    r"open (the |my )?project|focus (on )?(the |my )?project|"
+    r"switch to (the |my )?project|go (in)?to (the |my )?project"
+    r")\b",
+    re.I,
+)
+_CREATE_PROJECT = re.compile(
+    r"\b(create|make|start|new) (a |an |the |my )?project\b",
+    re.I,
+)
+_DEEP_RESEARCH = re.compile(
+    r"\b("
+    r"deep[- ]research|use deep research|do (a )?deep research|"
+    r"research brief|literature review"
+    r")\b",
+    re.I,
+)
 _CONVERSATION = re.compile(
     r"\b("
     r"i feel|i've been|ive been|what do you think about me|can we talk|"
@@ -46,14 +64,39 @@ def suggest_mode(user_text: str, current_mode_id: str) -> RouteDecision:
     if not text:
         return RouteDecision(current_mode_id, 0.0, "empty")
 
-    if re.search(r"\b(stay in|keep|switch to) (companion|conversation|planner)\b", text, re.I):
-        m = re.search(r"\b(companion|conversation|planner)\b", text, re.I)
-        if m:
-            return RouteDecision(m.group(1).lower(), 0.99, "explicit request")
+    # Stay in project focus unless Hayden explicitly exits (tools handle close).
+    if current_mode_id == "project":
+        return RouteDecision("project", 0.9, "project focus sticky")
 
-    if current_mode_id in {"conversation", "planner"} and (
+    if re.search(
+        r"\b(stay in|keep|switch to) (companion|conversation|planner|project|deep[- ]?research)\b",
+        text,
+        re.I,
+    ):
+        m = re.search(
+            r"\b(companion|conversation|planner|project|deep[- ]?research)\b", text, re.I
+        )
+        if m:
+            picked = m.group(1).lower().replace(" ", "_").replace("-", "_")
+            if picked == "deep_research" or picked.startswith("deep"):
+                picked = "deep_research"
+            return RouteDecision(picked, 0.99, "explicit request")
+
+    if _DEEP_RESEARCH.search(text):
+        return RouteDecision("deep_research", 0.95, "deep research request")
+
+    # open_project / create_project are tools — don't auto-switch mode without a named project.
+    if _OPEN_PROJECT.search(text) or _CREATE_PROJECT.search(text):
+        return RouteDecision(current_mode_id, 0.55, "project tool request")
+
+    if current_mode_id in {"conversation", "planner", "deep_research", "project"} and (
         _CONTINUE.match(text)
-        or (len(text) < 60 and not _PLANNER.search(text) and not re.match(r"^\s*(hi|hey|hello)\b", text, re.I))
+        or (
+            len(text) < 60
+            and not _PLANNER.search(text)
+            and not _DEEP_RESEARCH.search(text)
+            and not re.match(r"^\s*(hi|hey|hello)\b", text, re.I)
+        )
     ):
         return RouteDecision(current_mode_id, 0.7, "sticky follow-up")
 
@@ -66,7 +109,7 @@ def suggest_mode(user_text: str, current_mode_id: str) -> RouteDecision:
     if _CONVERSATION.search(text):
         return RouteDecision("conversation", 0.75, "personal dialogue cues")
 
-    if current_mode_id in {"conversation", "planner"} and len(text) > 20:
+    if current_mode_id in {"conversation", "planner", "deep_research", "project"} and len(text) > 20:
         return RouteDecision(current_mode_id, 0.4, "sticky follow-up")
 
     return RouteDecision(current_mode_id or DEFAULT_MODE_ID, 0.2, "default stay")

@@ -8,6 +8,7 @@ from ainet.tools.browser import open_chrome
 from ainet.tools.ops import DatabaseTools
 from ainet.tools.paths import PathError
 from ainet.tools.permissions import PermissionError_
+from ainet.tools.research import inspect_research, save_research
 from ainet.tools.web import web_fetch, web_search
 
 # OAC-safe tools (no general DB mutations). Kept in sync with ollama.modes.base.
@@ -20,9 +21,19 @@ READ_TOOL_NAMES = frozenset(
         "web_search",
         "web_fetch",
         "open_chrome",
+        "list_projects",
     }
 )
 OAC_TOOL_NAMES = READ_TOOL_NAMES
+# Session-scoped; OAC may call even when allow_mutations is False.
+PROJECT_SESSION_TOOLS = frozenset(
+    {
+        "create_project",
+        "list_projects",
+        "open_project",
+        "close_project",
+    }
+)
 
 
 
@@ -177,7 +188,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "create_folder",
-            "description": "Create a folder under an allowed location (see Folderrules.json).",
+            "description": (
+                "Create a subfolder only (inside an allowed location or a focused project). "
+                "Do NOT use this to start a new project — call create_project instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -191,12 +205,99 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "write_text",
+            "description": (
+                "Create or overwrite a UTF-8 text document (.txt, .md, etc.). "
+                "Prefer write_json/create_json for .json files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string", "description": "Full file text"},
+                    "create": {"type": "boolean", "default": True},
+                    "summary": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_project",
+            "description": (
+                "PREFERRED way to start any new project. Creates a project directory "
+                "at Projects/<Name>/ with Read.json, History.json, Notes.json, Plan.json, "
+                "Profile.json, Files/, and History/. Never use create_folder or create_cop "
+                "for this. Then call open_project to focus this chat on it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Project folder name (e.g. AINet or My App)",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "Short description for Read.json",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_projects",
+            "description": "List user projects under Projects/ (name, path, Read summary).",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_project",
+            "description": (
+                "Focus this chat on Projects/<Name>. While focused, that folder is the only "
+                "accessible DB path — create folders/text, rename, read by filename. "
+                "Call close_project to leave."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Project name or Projects/<Name> path",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Alias for name",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_project",
+            "description": "Leave project focus and restore normal OAC access to the full db/.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_cop",
             "description": (
-                "Create a course or project COP from Folderrules templates "
+                "Create a school course or Work COP from Folderrules templates "
                 "(Profile/Read/Plan/History). "
                 "path = COP root (School/Courses/<Code> or Work/Projects/<Name>). "
-                "kind = course | project."
+                "kind = course | project. "
+                "Not for Hayden's user projects — those use create_project."
             ),
             "parameters": {
                 "type": "object",
@@ -404,9 +505,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "open_chrome",
             "description": (
-                "Open an http(s) URL as a new tab in Google Chrome on this PC. "
-                "web_search already auto-opens the top hit — use this for extra URLs you cite, "
-                "or when the user asks to open/show a page. Call once per URL. "
+                "Open one or more http(s) URLs as new Chrome tabs on this PC. "
+                "Pass url and/or urls=[...] to open several at once (max 8). "
+                "web_search auto-opens top results — use this for extra pages. "
                 "Never claim a tab opened unless this tool ran (or search auto_opened it)."
             ),
             "parameters": {
@@ -414,7 +515,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "Absolute http(s) URL to open",
+                        "description": "Primary absolute http(s) URL to open",
+                    },
+                    "urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Additional http(s) URLs to open together (max 8 total).",
                     },
                     "new_tab": {
                         "type": "boolean",
@@ -422,7 +528,94 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "description": "Open in a new tab (default true).",
                     },
                 },
-                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_research",
+            "description": (
+                "Save a Deep Research brief into the private host vault "
+                "(runtime/research — invisible to SOI and normal DB reads). "
+                "The Doc panel shows the preview. Call once after fetching sources. "
+                "Body is markdown (1–2 pages) with numbered citations; "
+                "sources must include at least two http(s) URLs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Brief title",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "Hayden's original research question",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "≤400 char abstract",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Markdown 1–2 pager with [1] [2] citations",
+                    },
+                    "key_findings": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "3–8 bullet findings",
+                    },
+                    "sources": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "url": {"type": "string"},
+                                "publisher": {"type": "string"},
+                                "year": {"type": "string"},
+                                "note": {"type": "string"},
+                            },
+                            "required": ["url"],
+                        },
+                        "description": "Cited sources (IEEE, ACM, NIH, journals, societies — any credible publisher)",
+                    },
+                },
+                "required": ["title", "body", "sources"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_research",
+            "description": (
+                "Only way to list/read Deep Research briefs in the private vault. "
+                "Use list_only=true to list, or pass brief_id/path to load one brief."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "list_only": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "If true, list recent briefs (id/title/path).",
+                    },
+                    "brief_id": {
+                        "type": "string",
+                        "description": "Brief id from a prior save/list",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Vault-relative path e.g. runtime/research/briefs/Foo.json",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Max briefs when listing",
+                    },
+                },
             },
         },
     },
@@ -581,6 +774,7 @@ def tools_subset(names: tuple[str, ...] | list[str] | None = None) -> list[dict[
 
 
 def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
+    from ainet.tools import project as project_mod
     from ollama import file_by_id as file_by_id_mod
     from ollama import file_note as file_note_mod
 
@@ -593,6 +787,12 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
             kw["path"],
             kw["data"],
             create=bool(kw.get("create", False)),
+            summary=kw.get("summary"),
+        ),
+        "write_text": lambda **kw: db.write_text(
+            kw["path"],
+            str(kw.get("content") or ""),
+            create=bool(kw.get("create", True)),
             summary=kw.get("summary"),
         ),
         "create_json": lambda **kw: db.create_json(
@@ -608,6 +808,20 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
             kw["path"], kw["json_path"], kw["value"], summary=kw.get("summary")
         ),
         "create_folder": lambda **kw: db.create_folder(kw["path"], summary=kw.get("summary")),
+        "create_project": lambda **kw: project_mod.create_project(
+            db,
+            name=str(kw.get("name") or kw.get("path") or ""),
+            summary=str(kw.get("summary") or ""),
+        ),
+        "list_projects": lambda **kw: project_mod.list_projects(db),
+        "open_project": lambda **kw: {
+            "ok": False,
+            "error": "open_project is handled by the chat session host",
+        },
+        "close_project": lambda **kw: {
+            "ok": False,
+            "error": "close_project is handled by the chat session host",
+        },
         "create_cop": lambda **kw: db.create_cop(
             str(kw.get("path") or kw.get("folder_path") or ""),
             str(kw.get("kind") or kw.get("cop_type") or ""),
@@ -645,8 +859,28 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
             max_chars=int(kw.get("max_chars", 4000)),
         ),
         "open_chrome": lambda **kw: open_chrome(
-            kw["url"],
+            str(kw.get("url") or ""),
+            urls=kw.get("urls") if isinstance(kw.get("urls"), list) else None,
             new_tab=bool(kw["new_tab"]) if "new_tab" in kw else True,
+        ),
+        "save_research": lambda **kw: save_research(
+            db,
+            title=str(kw.get("title") or ""),
+            body=str(kw.get("body") or ""),
+            question=str(kw.get("question") or ""),
+            summary=str(kw.get("summary") or ""),
+            key_findings=kw.get("key_findings"),
+            sources=kw.get("sources"),
+            url=str(kw.get("url") or ""),
+            link=str(kw.get("link") or ""),
+            href=str(kw.get("href") or ""),
+        ),
+        "inspect_research": lambda **kw: inspect_research(
+            db,
+            brief_id=str(kw.get("brief_id") or kw.get("id") or ""),
+            path=str(kw.get("path") or ""),
+            list_only=bool(kw.get("list_only", False)),
+            limit=int(kw.get("limit", 20)),
         ),
         "file_by_id": lambda **kw: file_by_id_mod.file_by_id(
             db,

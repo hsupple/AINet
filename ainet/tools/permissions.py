@@ -29,6 +29,26 @@ class Action(str, Enum):
 PROTECTED_READ_ONLY = {"rules.txt"}
 CODE_ONLY_WRITE = {"calendar.json"}
 APPEND_ONLY = {"changelog.json", "masterlog.json"}
+_TEXT_EXT = {
+    ".txt",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".log",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".html",
+    ".css",
+    ".json",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+}
 
 
 @dataclass
@@ -102,6 +122,20 @@ class Permissions:
             raise PermissionError_(f"Folder name rejected by Folderrules: {name}")
         if kind == "json" and not self.rules.json_pattern.match(name):
             raise PermissionError_(f"JSON file name rejected by Folderrules: {name}")
+        if kind == "text":
+            stem_ok = self.rules.folder_pattern.match(Path(name).stem)
+            ext = Path(name).suffix.lower()
+            if not stem_ok or ext not in _TEXT_EXT:
+                raise PermissionError_(f"Text file name rejected: {name}")
+        if kind == "file":
+            # json or text
+            if self.rules.json_pattern.match(name):
+                return
+            stem_ok = self.rules.folder_pattern.match(Path(name).stem)
+            ext = Path(name).suffix.lower()
+            if stem_ok and ext in _TEXT_EXT:
+                return
+            raise PermissionError_(f"File name rejected by Folderrules: {name}")
 
     def assert_depth_ok(self, relative: str) -> None:
         depth = 0 if relative in ("", ".") else len(PurePosixPath(relative).parts)
@@ -121,6 +155,12 @@ class Permissions:
         parts = PurePosixPath(rel).parts
         top = parts[0]
         key = rel.casefold()
+
+        # Host-only vault (Deep Research briefs, OAC/SOI runtime). AI must use inspect_research.
+        if top.casefold() == "runtime":
+            raise PermissionError_(
+                "runtime/ is host-only. Use inspect_research to read Deep Research briefs."
+            )
 
         if key in PROTECTED_READ_ONLY:
             if action != Action.READ:
@@ -164,7 +204,11 @@ class Permissions:
             raise PermissionError_("AI cannot create new top-level entries.")
 
         name = posix.name
-        self.assert_name_ok(name, kind="json" if action == Action.CREATE_FILE else "folder")
+        if action == Action.CREATE_FILE:
+            kind = "json" if name.lower().endswith(".json") else "file"
+            self.assert_name_ok(name, kind=kind)
+        else:
+            self.assert_name_ok(name, kind="folder")
 
         for prefix in self.rules.create_allowed_prefixes():
             if relative == prefix or relative.startswith(prefix + "/"):
@@ -194,6 +238,10 @@ class Permissions:
 
         # Full personal tree under Hayden/ may grow freely (not the domain root itself).
         if parts[0].casefold() == "hayden" and len(parts) >= 2:
+            return
+
+        # User Projects/ tree (Projects/<Name>/...) may grow freely.
+        if parts[0].casefold() == "projects" and len(parts) >= 2:
             return
 
         raise PermissionError_(

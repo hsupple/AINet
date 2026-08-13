@@ -14,6 +14,7 @@ Never use create_under roots alone (not dest=Hayden).
 
 Routing guide:
 - Science, academic, technical/factual Q&A (thermo, fission, biology, ESP32, how-X-works) → Questions
+- Deep Research briefs are private (not for SOI filing). Never invent dest=Research.
 - Feelings, anxiety, coping, triggers → Psychology
 - Routines, caffeine habits, focus methods → Habits
 - People, social interactions → Relationships

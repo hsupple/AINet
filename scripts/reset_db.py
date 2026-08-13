@@ -108,7 +108,6 @@ SKELETON_DIRS = (
     "Household/Pantry",
     "Household/Maintenance",
     "Household/History",
-    "Projects",
     "Questions",
 )
 
@@ -206,10 +205,6 @@ SEED_FILES = (
     "Household/Pantry/Read.json",
     "Household/Read.json",
     "Household/Wants.json",
-    "Projects/History.json",
-    "Projects/Notes.json",
-    "Projects/Plan.json",
-    "Projects/Read.json",
     "Questions/History.json",
     "Questions/Notes.json",
     "Questions/Read.json",

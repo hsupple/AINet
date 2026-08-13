@@ -55,6 +55,9 @@ class DatabaseTools:
         for child in sorted(target.iterdir(), key=lambda p: p.name.lower()):
             if child.name.startswith("."):
                 continue
+            # Hide host-only runtime from AI listings (SOI + OAC).
+            if child.name.casefold() == "runtime":
+                continue
             children.append(
                 {
                     "name": child.name,
@@ -85,6 +88,8 @@ class DatabaseTools:
             for child in sorted(node.iterdir(), key=lambda p: p.name.lower()):
                 if child.name.startswith("."):
                     continue
+                if child.name.casefold() == "runtime":
+                    continue
                 if child.is_dir():
                     kids.append(walk(child, depth + 1))
                 else:
@@ -99,6 +104,53 @@ class DatabaseTools:
             return item
 
         return {"ok": True, "tree": walk(target, 0)}
+
+    def write_text(
+        self,
+        path: str,
+        content: str,
+        *,
+        create: bool = True,
+        summary: str | None = None,
+    ) -> dict[str, Any]:
+        """Write a UTF-8 text document (.txt/.md/etc.)."""
+        from ainet.tools.fsutil import atomic_write_text
+
+        exists = self.paths.resolve(path).exists()
+        if exists:
+            self.permissions.assert_can(Action.WRITE, path)
+        else:
+            if not create:
+                raise PathError(f"File does not exist (pass create=true): {path}")
+            self.permissions.assert_can(Action.CREATE_FILE, path)
+
+        target = self.paths.resolve(path)
+        if not exists:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self.permissions.assert_parent_capacity(target.parent)
+            kind = "json" if target.name.lower().endswith(".json") else "file"
+            self.permissions.assert_name_ok(target.name, kind=kind)
+
+        text = content if isinstance(content, str) else str(content or "")
+        atomic_write_text(target, text)
+        entry = changelog.append_entry(
+            self.paths,
+            action="write_text" if exists else "create_text",
+            path=path,
+            summary=summary or ("Updated text" if exists else "Created text"),
+            details={"chars": len(text)},
+        )
+        read_touch = self._maybe_mark_read_stale(
+            path, summary=summary or ("Updated text" if exists else "Created text")
+        )
+        return {
+            "ok": True,
+            "path": path,
+            "created": not exists,
+            "chars": len(text),
+            "changelog": entry,
+            "read_stale": read_touch,
+        }
 
     def create_json(
         self,
@@ -424,7 +476,8 @@ class DatabaseTools:
         if destination.exists():
             raise PathError(f"Destination already exists: {dest}")
         if source.is_file():
-            self.permissions.assert_name_ok(destination.name, kind="json")
+            kind = "json" if destination.name.lower().endswith(".json") else "file"
+            self.permissions.assert_name_ok(destination.name, kind=kind)
         else:
             self.permissions.assert_name_ok(destination.name, kind="folder")
         destination.parent.mkdir(parents=True, exist_ok=True)

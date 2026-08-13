@@ -110,6 +110,12 @@ class ChatApp:
                 "mode": self.session.mode.id,
                 "auto_mode": self.session.auto_mode,
                 "mode_locked": self.session.mode_locked,
+                "project_root": self.session.project_root,
+                "project_name": (
+                    self.session.project_root.rsplit("/", 1)[-1]
+                    if self.session.project_root
+                    else None
+                ),
                 "session_id": self.session.session_id,
                 "db_root": str(self.config.db_root),
                 "soi_enabled": self.config.soi_enabled,
@@ -142,6 +148,12 @@ class ChatApp:
                     "ok": True,
                     "reply": reply,
                     "mode": self.session.mode.id,
+                    "project_root": self.session.project_root,
+                    "project_name": (
+                        self.session.project_root.rsplit("/", 1)[-1]
+                        if self.session.project_root
+                        else None
+                    ),
                     "session_id": self.session.session_id,
                     "soi_running": self.watcher.running,
                 }
@@ -168,22 +180,48 @@ class ChatApp:
         def _on_tool(phase: str, name: str, detail: dict[str, Any]) -> None:
             detail = detail or {}
             if phase == "start":
+                args = detail.get("arguments") or {}
+                # Keep SSE small — huge save_research bodies stall / blank the tool card.
+                slim: dict[str, Any] = {}
+                if isinstance(args, dict):
+                    for key in (
+                        "title",
+                        "query",
+                        "url",
+                        "urls",
+                        "path",
+                        "dest",
+                        "entry_id",
+                        "summary",
+                        "question",
+                    ):
+                        if key in args and args[key] not in (None, ""):
+                            slim[key] = args[key]
+                    if not slim and args:
+                        # Fallback: first short scalar
+                        for key, val in args.items():
+                            if key in {"body", "sources", "key_findings", "data", "text"}:
+                                continue
+                            if isinstance(val, (str, int, float, bool)):
+                                slim[key] = val
+                                break
                 events.put(
                     {
                         "type": "tool_start",
                         "name": name,
-                        "arguments": detail.get("arguments") or {},
+                        "arguments": slim,
                     }
                 )
             elif phase == "done":
-                events.put(
-                    {
-                        "type": "tool_done",
-                        "name": name,
-                        "ok": bool(detail.get("ok", True)),
-                        "summary": detail.get("summary") or "",
-                    }
-                )
+                payload = {
+                    "type": "tool_done",
+                    "name": name,
+                    "ok": bool(detail.get("ok", True)),
+                    "summary": detail.get("summary") or "",
+                }
+                if isinstance(detail.get("research"), dict):
+                    payload["research"] = detail["research"]
+                events.put(payload)
 
         def _run() -> None:
             reply = ""
@@ -229,6 +267,12 @@ class ChatApp:
                         "reply": reply,
                         "cancelled": cancelled,
                         "mode": self.session.mode.id,
+                        "project_root": self.session.project_root,
+                        "project_name": (
+                            self.session.project_root.rsplit("/", 1)[-1]
+                            if self.session.project_root
+                            else None
+                        ),
                         "session_id": self.session.session_id,
                         "soi_running": self.watcher.running,
                         "voice": False,
@@ -300,6 +344,12 @@ class ChatApp:
 
     def set_mode(self, mode_id: str) -> dict[str, Any]:
         with self.lock:
+            mid = (mode_id or "").strip().lower().replace(" ", "_").replace("-", "_")
+            if mid == "project" and not self.session.project_root:
+                return {
+                    "ok": False,
+                    "error": "Open a project with the open_project tool first (or ask the AI to open one).",
+                }
             try:
                 mode = self.session.set_mode(mode_id, lock=True)
             except KeyError as exc:
@@ -323,6 +373,35 @@ class ChatApp:
                 "pending_changelog": pending,
                 **self.status(),
             }
+
+    def research_current(self) -> dict[str, Any]:
+        from ainet.tools.research import get_current_brief
+
+        brief = get_current_brief(self.session.db)
+        if not brief:
+            return {"ok": True, "brief": None}
+        return {"ok": True, "brief": brief}
+
+    def research_list(self) -> dict[str, Any]:
+        from ainet.tools.research import list_briefs
+
+        return {"ok": True, "briefs": list_briefs(self.session.db, limit=40)}
+
+    def research_get(self, *, brief_id: str = "", path: str = "") -> dict[str, Any]:
+        from ainet.tools.research import load_brief
+
+        brief = load_brief(self.session.db, brief_id=brief_id, path=path)
+        if not brief:
+            return {"ok": False, "error": "Brief not found"}
+        return {"ok": True, "brief": brief}
+
+    def open_chrome_url(self, url: str = "", urls: list[str] | None = None) -> dict[str, Any]:
+        from ainet.tools.browser import open_chrome
+
+        try:
+            return open_chrome(url or "", urls=urls, new_tab=True)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
 
     def shutdown(self) -> None:
         self.watcher.stop()
@@ -376,6 +455,22 @@ def make_handler(app: ChatApp):
                     return
             if path == "/api/status":
                 status, body, ctype = _json_bytes(app.status())
+                self._send(status, body, ctype)
+                return
+            if path == "/api/research/current":
+                status, body, ctype = _json_bytes(app.research_current())
+                self._send(status, body, ctype)
+                return
+            if path == "/api/research/list":
+                status, body, ctype = _json_bytes(app.research_list())
+                self._send(status, body, ctype)
+                return
+            if path == "/api/research/get":
+                brief_id = (qs.get("id") or qs.get("brief_id") or [""])[0]
+                rel = (qs.get("path") or [""])[0]
+                status, body, ctype = _json_bytes(
+                    app.research_get(brief_id=str(brief_id or ""), path=str(rel or ""))
+                )
                 self._send(status, body, ctype)
                 return
             if path == "/api/soi-log":
@@ -498,6 +593,14 @@ def make_handler(app: ChatApp):
                 return
             if path == "/api/soi":
                 status, body, ctype = _json_bytes(app.run_soi())
+                self._send(status, body, ctype)
+                return
+            if path == "/api/open-chrome":
+                raw_urls = data.get("urls")
+                urls = [str(u) for u in raw_urls] if isinstance(raw_urls, list) else None
+                status, body, ctype = _json_bytes(
+                    app.open_chrome_url(str(data.get("url") or ""), urls=urls)
+                )
                 self._send(status, body, ctype)
                 return
             self._send(404, b'{"ok":false,"error":"not found"}', "application/json")

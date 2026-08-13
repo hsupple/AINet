@@ -784,8 +784,15 @@ class SOIWorker:
             persist_oac_conversation=False,
             auto_mode=False,
         )
+        phase_for_mode = str(payload.get("phase") or "filing")
+        if phase_for_mode == "read_refresh":
+            mode_id = "soi_test_p2"
+        elif phase_for_mode == "filing":
+            mode_id = "soi_test"
+        else:
+            mode_id = "soi"
         session = ChatSession(
-            mode=get_mode("soi_test" if (payload.get("phase") or "filing") == "filing" else "soi"),
+            mode=get_mode(mode_id),
             config=soi_config,
             client=self.client,
             auto_mode=False,
@@ -917,6 +924,7 @@ class SOIWorker:
             "set_json_path",
             "create_folder",
             "create_cop",
+            "create_project",
             "capture_inbox",
             "mark_read_stale",
             "mark_read_refreshed",

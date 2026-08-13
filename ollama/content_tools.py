@@ -8,8 +8,10 @@ from typing import Any
 
 _TOOL_XML = re.compile(r"<tool_call>\s*", re.S)
 _FENCE = re.compile(r"```(?:json)?\s*", re.I)
+# Courses under a misnamed Hayden/Planner|Plans tree → School/Courses.
+# Do NOT remap Hayden/Planner itself — that is a real personal domain folder.
 _PLANS_COURSES = re.compile(r"(?i)^Hayden/(?:Plans|Planner)/Courses/")
-_PLANS_ROOT = re.compile(r"(?i)^Hayden/(?:Plans|Planner)(?=/|$)")
+_PLANS_ALIAS_ROOT = re.compile(r"(?i)^Hayden/Plans(?=/|$)")
 _NARRATED_COURSE = re.compile(
     r"(?i)(?:Hayden/(?:Plans|Planner)|School)/Courses/([A-Za-z][A-Za-z0-9._-]{1,24})"
 )
@@ -18,7 +20,8 @@ _NARRATED_COURSE = re.compile(
 def remap_folderrules_path(path: str) -> str:
     p = (path or "").replace("\\", "/").strip().strip('"')
     p = _PLANS_COURSES.sub("School/Courses/", p)
-    p = _PLANS_ROOT.sub("School", p)
+    # Legacy alias Hayden/Plans → School (not Hayden/Planner).
+    p = _PLANS_ALIAS_ROOT.sub("School", p)
     if re.search(r"(?i)^School/Schedule\.json$", p):
         return "School/Plan.json"
     return p
@@ -32,8 +35,16 @@ def normalize_soi_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, 
     if "path" not in args and args.get("folder_path"):
         args["path"] = args["folder_path"]
     path = str(args.get("path") or "")
+    from ainet.tools.project import user_project_name_from_path
+
     if name == "create_folder" and "/Courses/" in path:
         return "create_cop", {"path": path, "kind": "course", "summary": args.get("summary")}
+    extracted = user_project_name_from_path(path)
+    if name in {"create_folder", "create_cop"} and extracted:
+        out: dict[str, Any] = {"name": extracted}
+        if args.get("summary"):
+            out["summary"] = args["summary"]
+        return "create_project", out
     if name == "create_folder" and "/Projects/" in path:
         return "create_cop", {"path": path, "kind": "project", "summary": args.get("summary")}
     if name == "create_cop":

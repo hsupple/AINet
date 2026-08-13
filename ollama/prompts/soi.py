@@ -11,6 +11,7 @@ create_cop only when user_text names that course code or project — never inven
 
 Routing guide:
 - Science, academic, technical/factual Q&A (thermo, fission, biology, ESP32, how-X-works) → Questions
+- Deep Research briefs are NOT in the SOI tree — ignore research vault / Doc panel files.
 - Self/feelings, anxiety, coping, triggers → Psychology
 - Routines, caffeine habits, focus methods → Habits
 - People, social interactions → Relationships
