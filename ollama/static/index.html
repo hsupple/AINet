@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css" />
   <style>
     :root {
       --bg: #f3f4f1;
@@ -26,6 +27,14 @@
       --tool: #3d6b8f;
       --radius: 14px;
       --shadow: 0 1px 0 rgba(18, 20, 18, 0.04), 0 10px 30px rgba(18, 20, 18, 0.04);
+      --shadow-card:
+        0 1px 1px rgba(18, 20, 18, 0.03),
+        0 4px 12px rgba(18, 20, 18, 0.06),
+        0 14px 32px rgba(18, 20, 18, 0.07);
+      --shadow-card-hover:
+        0 2px 4px rgba(18, 20, 18, 0.04),
+        0 10px 24px rgba(18, 20, 18, 0.09),
+        0 24px 48px rgba(18, 20, 18, 0.08);
     }
 
     * { box-sizing: border-box; }
@@ -193,13 +202,14 @@
       border: 1px solid var(--line);
       line-height: 1.55;
       font-size: 0.96rem;
-      white-space: pre-wrap;
       word-break: break-word;
     }
+    .msg-body.plain { white-space: pre-wrap; }
     .msg.user .msg-body {
       background: var(--user);
       color: #f5f7f4;
       border-color: transparent;
+      white-space: pre-wrap;
     }
     .msg.bot .msg-body {
       background: #fafbf9;
@@ -212,12 +222,95 @@
       font-size: 0.8rem;
       padding: 0.45rem 0.75rem;
       text-align: center;
+      white-space: pre-wrap;
     }
     .msg.error .msg-body {
       color: var(--danger);
       border-color: rgba(194, 71, 44, 0.35);
       background: rgba(194, 71, 44, 0.05);
+      white-space: pre-wrap;
     }
+
+    /* Markdown / math */
+    .msg-body.md {
+      white-space: normal;
+    }
+    .msg-body.md > :first-child { margin-top: 0; }
+    .msg-body.md > :last-child { margin-bottom: 0; }
+    .msg-body.md p { margin: 0.55rem 0; }
+    .msg-body.md h1,
+    .msg-body.md h2,
+    .msg-body.md h3,
+    .msg-body.md h4 {
+      margin: 0.9rem 0 0.4rem;
+      line-height: 1.25;
+      letter-spacing: -0.02em;
+      font-weight: 700;
+    }
+    .msg-body.md h1 { font-size: 1.25rem; }
+    .msg-body.md h2 { font-size: 1.12rem; }
+    .msg-body.md h3 { font-size: 1.02rem; }
+    .msg-body.md ul,
+    .msg-body.md ol {
+      margin: 0.45rem 0;
+      padding-left: 1.25rem;
+    }
+    .msg-body.md li { margin: 0.2rem 0; }
+    .msg-body.md blockquote {
+      margin: 0.65rem 0;
+      padding: 0.35rem 0.75rem;
+      border-left: 3px solid var(--accent);
+      color: #3a433e;
+      background: var(--accent-soft);
+      border-radius: 0 8px 8px 0;
+    }
+    .msg-body.md code {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 0.86em;
+      background: #eef1ec;
+      padding: 0.1em 0.35em;
+      border-radius: 5px;
+    }
+    .msg-body.md pre {
+      margin: 0.65rem 0;
+      padding: 0.75rem 0.85rem;
+      overflow-x: auto;
+      background: #121412;
+      color: #e8efe9;
+      border-radius: 10px;
+    }
+    .msg-body.md pre code {
+      background: transparent;
+      padding: 0;
+      color: inherit;
+      font-size: 0.82rem;
+    }
+    .msg-body.md table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 0.65rem 0;
+      font-size: 0.9rem;
+    }
+    .msg-body.md th,
+    .msg-body.md td {
+      border: 1px solid var(--line-strong);
+      padding: 0.4rem 0.55rem;
+      text-align: left;
+    }
+    .msg-body.md th { background: #eef1ec; }
+    .msg-body.md a { color: var(--accent); }
+    .msg-body.md hr {
+      border: 0;
+      border-top: 1px solid var(--line);
+      margin: 0.85rem 0;
+    }
+    .msg-body.md .katex-display {
+      margin: 0.85rem 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 0.35rem 0;
+    }
+    .msg-body.md .katex { font-size: 1.08em; }
 
     .msg-body.streaming::after {
       content: "";
@@ -245,43 +338,38 @@
     .tool-log {
       display: flex;
       flex-direction: column;
-      gap: 0.4rem;
-      margin: 0 0 0.55rem;
+      gap: 0.5rem;
+      margin: 0 0 0.65rem;
     }
 
     .tool-row {
       display: grid;
       grid-template-columns: auto 1fr auto;
-      gap: 0.55rem;
+      gap: 0.65rem;
       align-items: start;
-      padding: 0.55rem 0.7rem;
-      border-radius: 10px;
-      border: 1px solid var(--line);
-      background: #f7f8f5;
-      font-family: "IBM Plex Mono", ui-monospace, monospace;
-      font-size: 0.74rem;
-      line-height: 1.4;
+      padding: 0.8rem 0.95rem;
+      border-radius: 16px;
+      border: none;
+      background: #fff;
+      box-shadow: var(--shadow-card);
+      font-family: "Figtree", sans-serif;
+      font-size: 0.88rem;
+      line-height: 1.45;
       animation: tool-in 380ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
-      overflow: hidden;
     }
     .tool-row.running {
-      border-color: rgba(12, 143, 85, 0.28);
-      background: linear-gradient(90deg, var(--accent-soft), #f7f8f5 55%);
-      background-size: 200% 100%;
-      animation: tool-in 380ms cubic-bezier(0.2, 0.85, 0.2, 1) both, shimmer 1.4s linear infinite;
+      box-shadow: var(--shadow-card-hover);
     }
-    .tool-row.ok { border-color: rgba(12, 143, 85, 0.22); }
     .tool-row.fail {
-      border-color: rgba(194, 71, 44, 0.35);
-      background: rgba(194, 71, 44, 0.05);
+      background: #fffaf8;
     }
 
     .tool-dot {
-      width: 0.55rem;
-      height: 0.55rem;
-      margin-top: 0.28rem;
+      width: 0.5rem;
+      height: 0.5rem;
+      margin-top: 0.4rem;
       border-radius: 50%;
-      background: var(--tool);
+      background: #b0bab3;
       flex-shrink: 0;
     }
     .tool-row.running .tool-dot {
@@ -295,35 +383,46 @@
 
     .tool-main { min-width: 0; }
     .tool-name {
-      font-weight: 500;
+      font-weight: 600;
       color: var(--ink);
-      letter-spacing: -0.01em;
+      letter-spacing: -0.02em;
+      font-size: 0.92rem;
     }
     .tool-detail {
-      margin-top: 0.2rem;
+      margin-top: 0.28rem;
       color: var(--muted);
       white-space: pre-wrap;
       word-break: break-word;
+      font-size: 0.82rem;
+      line-height: 1.45;
     }
     .tool-status {
-      font-size: 0.64rem;
+      font-size: 0.7rem;
       font-weight: 600;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
+      letter-spacing: 0.01em;
+      text-transform: none;
       color: var(--muted);
-      padding-top: 0.15rem;
+      padding: 0.28rem 0.65rem;
+      border-radius: 999px;
+      background: #f1f3f0;
+      align-self: start;
     }
-    .tool-row.running .tool-status { color: var(--accent); }
-    .tool-row.ok .tool-status { color: var(--ok); }
-    .tool-row.fail .tool-status { color: var(--danger); }
+    .tool-row.running .tool-status {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .tool-row.ok .tool-status {
+      color: var(--ok);
+      background: rgba(12, 143, 85, 0.1);
+    }
+    .tool-row.fail .tool-status {
+      color: var(--danger);
+      background: rgba(194, 71, 44, 0.1);
+    }
 
     @keyframes tool-in {
-      from { opacity: 0; transform: translateX(-10px) scale(0.98); max-height: 0; padding-top: 0; padding-bottom: 0; }
-      to { opacity: 1; transform: none; max-height: 200px; }
-    }
-    @keyframes shimmer {
-      0% { background-position: 100% 0; }
-      100% { background-position: -100% 0; }
+      from { opacity: 0; transform: translateY(8px) scale(0.985); }
+      to { opacity: 1; transform: none; }
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     @keyframes rise {
@@ -406,87 +505,118 @@
     #soi-feed {
       display: flex;
       flex-direction: column;
-      gap: 0.55rem;
-      padding: 0.85rem;
-      background: #fff;
+      gap: 0.7rem;
+      padding: 1rem 0.95rem 1.15rem;
+      background:
+        radial-gradient(120% 80% at 50% -20%, rgba(255, 255, 255, 0.9), transparent 55%),
+        #eef1ec;
     }
 
     .soi-card {
       display: flex;
       flex-direction: column;
-      gap: 0.4rem;
-      padding: 0.7rem 0.75rem;
-      border: 1px solid var(--line);
-      border-left: 3px solid var(--tool, #6a726c);
-      border-radius: 10px;
-      background: #fafbf9;
-      animation: rise 220ms ease-out;
+      gap: 0.55rem;
+      padding: 0.95rem 1.05rem;
+      border: none;
+      border-radius: 18px;
+      background: #fff;
+      box-shadow: var(--shadow-card);
+      animation: rise 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
     }
-    .soi-card.pending { border-left-color: var(--accent); }
-    .soi-card.ok { border-left-color: var(--ok); }
-    .soi-card.fail, .soi-card.error-ev { border-left-color: var(--danger); }
-    .soi-card.phase { border-left-color: var(--ink); background: #f3f4f1; }
+    .soi-card.pending {
+      box-shadow: var(--shadow-card-hover);
+    }
+    .soi-card.fail, .soi-card.error-ev {
+      background: #fffaf8;
+      box-shadow:
+        0 1px 1px rgba(194, 71, 44, 0.04),
+        0 6px 16px rgba(194, 71, 44, 0.07),
+        0 14px 32px rgba(18, 20, 18, 0.05);
+    }
+    .soi-card.phase {
+      background: #fff;
+    }
     .soi-card-top {
       display: flex;
       justify-content: space-between;
-      gap: 0.5rem;
+      gap: 0.65rem;
       align-items: center;
     }
     .soi-tool-badge {
-      font-family: "IBM Plex Mono", monospace;
-      font-size: 0.78rem;
-      font-weight: 500;
+      font-family: "Figtree", sans-serif;
+      font-size: 0.95rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
       color: var(--ink);
     }
     .soi-card-status {
-      font-size: 0.64rem;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
+      font-size: 0.72rem;
+      letter-spacing: 0.01em;
+      text-transform: none;
       font-weight: 600;
       color: var(--muted);
+      padding: 0.28rem 0.65rem;
+      border-radius: 999px;
+      background: #f1f3f0;
+      flex-shrink: 0;
     }
-    .soi-card.pending .soi-card-status { color: var(--accent); }
+    .soi-card.pending .soi-card-status {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
     .soi-card.pending .soi-card-status::before {
       content: "";
       display: inline-block;
-      width: 0.45rem;
-      height: 0.45rem;
-      margin-right: 0.3rem;
+      width: 0.4rem;
+      height: 0.4rem;
+      margin-right: 0.4rem;
       border-radius: 50%;
       border: 1.5px solid var(--accent);
       border-top-color: transparent;
       vertical-align: -1px;
       animation: spin 0.7s linear infinite;
     }
-    .soi-card.ok .soi-card-status { color: var(--ok); }
-    .soi-card.fail .soi-card-status { color: var(--danger); }
+    .soi-card.ok .soi-card-status {
+      color: var(--ok);
+      background: rgba(12, 143, 85, 0.1);
+    }
+    .soi-card.fail .soi-card-status {
+      color: var(--danger);
+      background: rgba(194, 71, 44, 0.1);
+    }
     .soi-card-detail {
-      padding: 0.45rem 0.55rem;
-      border-radius: 8px;
-      background: #fff;
-      border: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      padding: 0;
+      background: transparent;
+      border: none;
     }
     .soi-card-arg, .soi-card-result, .soi-card-hint, .soi-phase-meta {
       margin: 0;
-      font-size: 0.76rem;
-      line-height: 1.45;
-      color: #3a433e;
+      font-size: 0.84rem;
+      line-height: 1.5;
+      color: #4a534d;
       white-space: pre-wrap;
       word-break: break-word;
-      font-family: "IBM Plex Mono", monospace;
+      font-family: "Figtree", sans-serif;
     }
     .soi-card-result {
-      margin-top: 0.35rem;
-      padding-top: 0.35rem;
-      border-top: 1px solid var(--line);
+      margin-top: 0.15rem;
+      padding-top: 0.45rem;
+      border-top: 1px solid rgba(18, 20, 18, 0.06);
       color: var(--muted);
     }
     .soi-phase-label {
       font-family: "Syne", sans-serif;
-      font-size: 0.95rem;
+      font-size: 0.98rem;
       font-weight: 700;
-      letter-spacing: -0.02em;
+      letter-spacing: -0.03em;
       color: var(--ink);
+    }
+    .soi-card.phase .soi-phase-meta {
+      color: var(--muted);
+      font-size: 0.84rem;
     }
     .tool-file_note, .tool-file_by_id { --tool: #0c8f55; }
     .tool-write_json, .tool-create_json, .tool-patch_json, .tool-set_json_path { --tool: #c2472c; }
@@ -527,6 +657,16 @@
       border-radius: 11px;
     }
     form button[type="submit"]:hover { background: #0a7a48; }
+    form button#send.stop {
+      background: #c2472c;
+      border-color: transparent;
+    }
+    form button#send.stop:hover { background: #a33a24; }
+    #soi.stop-soi {
+      background: #c2472c;
+      border-color: transparent;
+    }
+    #soi.stop-soi:hover { background: #a33a24; }
     .hint {
       grid-column: 1 / -1;
       font-size: 0.7rem;
@@ -574,10 +714,14 @@
     <form id="form">
       <textarea id="input" rows="2" placeholder="Message…" autofocus></textarea>
       <button type="submit" id="send">Send</button>
-      <div class="hint">Enter to send · Shift+Enter for newline · tools animate inline as they run</div>
+      <div class="hint">Enter to send · Shift+Enter for newline · Stop cancels a stuck reply · tools animate inline</div>
     </form>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
   <script>
     const logEl = document.getElementById("log");
     const form = document.getElementById("form");
@@ -593,6 +737,7 @@
     const soiViewPanel = document.getElementById("soi-view-panel");
     const soiViewRaw = document.getElementById("soi-view-raw");
     let busy = false;
+    let chatAbort = null;
     let lastSoiId = 0;
     const pendingTools = new Map();
 
@@ -614,25 +759,164 @@
       return "tool-" + String(name || "tool").replace(/[^a-zA-Z0-9_]/g, "_");
     }
 
-    function hintFromRow(row) {
-      if (row.hint) return String(row.hint).trim();
-      const args = row.arguments;
-      if (args && typeof args === "object") {
-        for (const key of ["path", "dest", "query", "url", "entry_id", "entry_ids", "title", "slug", "folder_path"]) {
-          if (args[key] == null || args[key] === "") continue;
-          const val = Array.isArray(args[key]) ? args[key].join(", ") : String(args[key]);
-          return key + "=" + val;
-        }
+    const TOOL_LABELS = {
+      file_note: "File note",
+      file_by_id: "File by ID",
+      write_json: "Write JSON",
+      create_json: "Create JSON",
+      patch_json: "Update JSON",
+      set_json_path: "Set JSON path",
+      read_json: "Read JSON",
+      read_text: "Read text",
+      list_dir: "List folder",
+      tree: "Folder tree",
+      web_search: "Web search",
+      web_fetch: "Open page",
+      open_chrome: "Open in Chrome",
+      create_cop: "Create content",
+    };
+
+    const ARG_LABELS = {
+      path: "Path",
+      dest: "Destination",
+      query: "Search",
+      url: "Link",
+      entry_id: "Entry",
+      entry_ids: "Entries",
+      title: "Title",
+      slug: "Slug",
+      folder_path: "Folder",
+      note: "Note",
+      text: "Text",
+      field: "Field",
+      summary: "Summary",
+      kind: "Type",
+    };
+
+    function titleWords(s) {
+      return String(s || "")
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+
+    function toolLabel(name) {
+      const key = String(name || "tool");
+      if (TOOL_LABELS[key]) return TOOL_LABELS[key];
+      return titleWords(key) || "Tool";
+    }
+
+    function statusLabel(kind) {
+      if (kind === "running") return "Working";
+      if (kind === "ok") return "Done";
+      if (kind === "fail") return "Failed";
+      return titleWords(kind);
+    }
+
+    function prettyValue(val) {
+      if (val == null) return "";
+      if (Array.isArray(val)) return val.map(prettyValue).filter(Boolean).join(", ");
+      let s = String(val).trim();
+      if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith('"') && s.endsWith('"'))) {
+        s = s.slice(1, -1);
+      }
+      if (/^discard$/i.test(s)) return "Discard";
+      if (/^[a-z]+(?:_[a-z0-9]+)+$/i.test(s) && s.length < 48) return titleWords(s);
+      if (s.length > 140) return s.slice(0, 140) + "…";
+      return s;
+    }
+
+    function argLabel(key) {
+      if (ARG_LABELS[key]) return ARG_LABELS[key];
+      return titleWords(key);
+    }
+
+    function formatArgPair(key, val) {
+      const nice = prettyValue(val);
+      if (!nice) return "";
+      return argLabel(key) + " · " + nice;
+    }
+
+    function parseHintString(hint) {
+      let s = String(hint || "").trim();
+      if (!s) return "";
+      s = s.replace(/^\s+/, "");
+      const m = s.match(/^([a-zA-Z_][\w]*)\s*=\s*(.+)$/);
+      if (m) return formatArgPair(m[1], m[2]);
+      if (s.startsWith("{") || s.startsWith("[")) {
         try {
-          const raw = JSON.stringify(args);
-          return raw.length > 160 ? raw.slice(0, 160) + "…" : raw;
+          const obj = JSON.parse(s);
+          if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+            for (const key of Object.keys(ARG_LABELS)) {
+              if (obj[key] == null || obj[key] === "") continue;
+              return formatArgPair(key, obj[key]);
+            }
+          }
         } catch (e) {}
       }
-      if (row.summary) return String(row.summary);
-      if (row.preview) {
-        const p = String(row.preview).trim();
-        return p.length > 180 ? p.slice(0, 180) + "…" : p;
+      return prettyValue(s);
+    }
+
+    function formatArgsObject(args) {
+      if (!args || typeof args !== "object") return "";
+      const preferred = ["dest", "path", "folder_path", "query", "url", "title", "entry_id", "entry_ids", "slug", "note", "text", "kind"];
+      for (const key of preferred) {
+        if (args[key] == null || args[key] === "") continue;
+        return formatArgPair(key, args[key]);
       }
+      for (const key of Object.keys(args)) {
+        if (args[key] == null || args[key] === "") continue;
+        return formatArgPair(key, args[key]);
+      }
+      return "";
+    }
+
+    function prettySummary(text) {
+      let s = String(text || "").trim();
+      if (!s) return "";
+      s = s.replace(/^\(SOI\s+/i, "").replace(/\)$/, "");
+      s = s.replace(/\b([a-z]+(?:_[a-z0-9]+)+)\b/g, (_, w) => titleWords(w));
+      s = s.replace(/\s*=\s*/g, ": ");
+      s = s.replace(/['"]/g, "");
+      if (s.length > 180) s = s.slice(0, 180) + "…";
+      return s;
+    }
+
+    function prettyPhaseMeta(text) {
+      let s = String(text || "").trim();
+      if (!s) return "";
+      s = s.replace(/^\(SOI\s+/i, "").replace(/\)$/, "");
+      s = s.replace(/^watcher on:\s*/i, "");
+      s = s.replace(/^wake:\s*/i, "");
+      s = s.replace(/^filing\.\.\.\s*/i, "");
+      s = s.replace(/^filing done:\s*/i, "");
+      s = s.replace(/^backing off\s*/i, "Waiting ");
+      s = s.replace(/\bfile@([\d.]+)s/gi, "file idle $1s");
+      s = s.replace(/\bread@([\d.]+)s/gi, "read idle $1s");
+      s = s.replace(/\btimeout@([\d.]+)s/gi, "timeout $1s");
+      s = s.replace(/\bphase=(\S+)/gi, (_, p) => "phase " + titleWords(p));
+      s = s.replace(/\bidle=([\d.]+)s/gi, "idle $1s");
+      s = s.replace(/\bchangelog=(\d+)/gi, "$1 changelog");
+      s = s.replace(/\binbox=(\d+)/gi, "$1 inbox");
+      s = s.replace(/\bfiled=(\d+)/gi, "filed $1");
+      s = s.replace(/\bdiscarded=(\d+)/gi, "discarded $1");
+      s = s.replace(/\bpending=(\d+)/gi, "pending $1");
+      s = s.replace(/--+/g, "·");
+      s = s.replace(/\s+/g, " ").trim();
+      return s;
+    }
+
+    function hintFromRow(row) {
+      const args = row && row.arguments;
+      const fromArgs = formatArgsObject(args);
+      if (fromArgs) return fromArgs;
+      if (row && row.hint) {
+        const h = parseHintString(row.hint);
+        if (h) return h;
+      }
+      if (row && row.summary) return prettySummary(row.summary);
+      if (row && row.preview) return prettySummary(row.preview);
       return "";
     }
 
@@ -711,7 +995,7 @@
           '<div class="soi-card-detail"><p class="soi-phase-meta"></p></div>' +
         "</div>";
       el.querySelector(".soi-phase-label").textContent = copy.title;
-      const metaText = String(copy.meta || "").replace(/^\(SOI\s+/i, "").replace(/\)$/, "");
+      const metaText = prettyPhaseMeta(copy.meta || "");
       const metaEl = el.querySelector(".soi-phase-meta");
       if (metaText) metaEl.textContent = metaText;
       else metaEl.parentElement.remove();
@@ -726,10 +1010,11 @@
         '<div class="soi-card-body">' +
           '<div class="soi-card-top">' +
             '<span class="soi-tool-badge"></span>' +
-            '<span class="soi-card-status">running</span>' +
+            '<span class="soi-card-status"></span>' +
           "</div>" +
         "</div>";
-      el.querySelector(".soi-tool-badge").textContent = name;
+      el.querySelector(".soi-tool-badge").textContent = toolLabel(name);
+      el.querySelector(".soi-card-status").textContent = statusLabel("running");
       const hint = hintFromRow(row);
       el.dataset.arg = hint;
       fillDetail(el, hint, "");
@@ -747,7 +1032,7 @@
       if (!el) {
         appendToolStart({
           name,
-          hint: hintFromRow(row),
+          hint: row.hint,
           arguments: row.arguments,
           summary: row.summary,
         });
@@ -757,15 +1042,15 @@
       el.classList.remove("pending");
       el.classList.add(ok ? "ok" : "fail");
       const status = el.querySelector(".soi-card-status");
-      if (status) status.textContent = ok ? "ok" : "fail";
-      fillDetail(el, el.dataset.arg || hintFromRow(row), row.summary || "");
+      if (status) status.textContent = statusLabel(ok ? "ok" : "fail");
+      fillDetail(el, el.dataset.arg || hintFromRow(row), prettySummary(row.summary || ""));
     }
 
     function appendNoteCard(row, kind) {
       const el = document.createElement("article");
       el.className = "soi-card " + (kind || "note");
       el.innerHTML = '<div class="soi-card-body"><div class="soi-card-detail"><p class="soi-card-hint"></p></div></div>';
-      el.querySelector(".soi-card-hint").textContent = row.text || "";
+      el.querySelector(".soi-card-hint").textContent = prettyPhaseMeta(row.text || "") || prettySummary(row.text || "");
       soiFeed.appendChild(el);
     }
 
@@ -817,7 +1102,7 @@
         wrap._pendingTools = new Map();
       }
       const body = document.createElement("div");
-      body.className = "msg-body";
+      body.className = "msg-body" + (kind === "bot" ? " plain" : "");
       const content = asText(text);
       if (content) body.textContent = content;
       wrap.appendChild(body);
@@ -832,17 +1117,120 @@
       return addMessage(text, kind);
     }
 
-    function appendFlow(body, delta) {
-      if (!delta) return;
-      const span = document.createElement("span");
-      span.className = "flow";
-      span.textContent = delta;
-      body.appendChild(span);
-      body.classList.add("streaming");
+    function extractMath(src) {
+      const chunks = [];
+      const push = (tex, display) => {
+        const i = chunks.length;
+        chunks.push({ tex, display });
+        return "@@MATH" + i + "@@";
+      };
+      let s = String(src || "");
+      s = s.replace(/\\\$/g, "@@DOLLAR@@");
+      s = s.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => push(tex, true));
+      s = s.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => push(tex, false));
+      s = s.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) => push(tex, true));
+      s = s.replace(/\$([^$\n]+?)\$/g, (_, tex) => push(tex, false));
+      s = s.replace(/@@DOLLAR@@/g, "\\$");
+      return { text: s, chunks };
+    }
+
+    function restoreMathPlaceholders(html, chunks) {
+      return String(html || "").replace(/@@MATH(\d+)@@/g, (_, n) => {
+        const i = Number(n);
+        const item = chunks[i];
+        if (!item) return "";
+        const open = item.display ? "$$" : "$";
+        return open + item.tex + open;
+      });
+    }
+
+    function renderBotMarkdown(body, text, opts) {
+      const streaming = !!(opts && opts.streaming);
+      const raw = String(text || "");
+      body.classList.remove("plain", "sys");
+      if (streaming) body.classList.add("streaming");
+      else body.classList.remove("streaming");
+      body.classList.add("md");
+      if (!raw.trim()) {
+        if (!streaming) {
+          body.classList.add("plain");
+          body.classList.remove("md");
+          body.textContent = "(empty reply)";
+        }
+        return;
+      }
+      if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+        body.classList.add("plain");
+        body.classList.remove("md");
+        body.textContent = raw;
+        return;
+      }
+      try {
+        const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 80;
+        const { text: protectedText, chunks } = extractMath(raw);
+        marked.setOptions({ gfm: true, breaks: true });
+        const dirty = restoreMathPlaceholders(marked.parse(protectedText), chunks);
+        body.innerHTML = DOMPurify.sanitize(dirty, {
+          USE_PROFILES: { html: true },
+          ADD_ATTR: ["target", "rel"],
+        });
+        if (typeof renderMathInElement === "function") {
+          renderMathInElement(body, {
+            delimiters: [
+              { left: "$$", right: "$$", display: true },
+              { left: "\\[", right: "\\]", display: true },
+              { left: "$", right: "$", display: false },
+              { left: "\\(", right: "\\)", display: false },
+            ],
+            throwOnError: false,
+            strict: "ignore",
+            trust: false,
+          });
+        }
+        if (nearBottom) logEl.scrollTop = logEl.scrollHeight;
+      } catch (e) {
+        body.classList.add("plain");
+        body.classList.remove("md");
+        body.textContent = raw;
+      }
+    }
+
+    function scheduleLiveMarkdown(body, getText) {
+      const text = typeof getText === "function" ? getText() : getText;
+      if (!text) return;
+      if (!body.classList.contains("md")) {
+        if (body._mdTimer) {
+          clearTimeout(body._mdTimer);
+          body._mdTimer = null;
+        }
+        renderBotMarkdown(body, text, { streaming: true });
+        return;
+      }
+      if (body._mdTimer) return;
+      body._mdTimer = setTimeout(() => {
+        body._mdTimer = null;
+        const latest = typeof getText === "function" ? getText() : getText;
+        if (latest) renderBotMarkdown(body, latest, { streaming: true });
+      }, 40);
+    }
+
+    function flushLiveMarkdown(body, text) {
+      if (body._mdTimer) {
+        clearTimeout(body._mdTimer);
+        body._mdTimer = null;
+      }
+      renderBotMarkdown(body, text, { streaming: false });
     }
 
     function chatToolStart(msg, row) {
       if (!msg || !msg._tools) return;
+      const body = msg._body;
+      if (body) {
+        body.classList.remove("sys");
+        if (body.textContent === "…" || body.textContent === "...") {
+          body.textContent = "";
+        }
+      }
       msg._tools.hidden = false;
       const name = row.name || "tool";
       const el = document.createElement("div");
@@ -851,8 +1239,9 @@
       el.innerHTML =
         '<span class="tool-dot"></span>' +
         '<div class="tool-main"><div class="tool-name"></div><div class="tool-detail"></div></div>' +
-        '<span class="tool-status">run</span>';
-      el.querySelector(".tool-name").textContent = name;
+        '<span class="tool-status"></span>';
+      el.querySelector(".tool-name").textContent = toolLabel(name);
+      el.querySelector(".tool-status").textContent = statusLabel("running");
       const detailEl = el.querySelector(".tool-detail");
       if (detail) detailEl.textContent = detail;
       else detailEl.remove();
@@ -878,7 +1267,7 @@
       el.classList.remove("running");
       el.classList.add(ok ? "ok" : "fail");
       const status = el.querySelector(".tool-status");
-      if (status) status.textContent = ok ? "ok" : "fail";
+      if (status) status.textContent = statusLabel(ok ? "ok" : "fail");
       const detailEl = el.querySelector(".tool-detail") || (() => {
         const d = document.createElement("div");
         d.className = "tool-detail";
@@ -886,8 +1275,8 @@
         return d;
       })();
       const arg = el.dataset.arg || hintFromRow(row);
-      const summary = row.summary || "";
-      detailEl.textContent = [arg, summary].filter(Boolean).join("\n→ ");
+      const summary = prettySummary(row.summary || "");
+      detailEl.textContent = [arg, summary].filter(Boolean).join("\n");
       logEl.scrollTop = logEl.scrollHeight;
     }
 
@@ -942,11 +1331,20 @@
     }
 
     function setSoiUi(running) {
-      soiBtn.disabled = !!running;
+      soiBtn.disabled = false;
       soiBtn.classList.toggle("running", !!running);
-      soiBtn.textContent = running ? "SOI running…" : "Start SOI";
+      soiBtn.classList.toggle("stop-soi", !!running);
+      soiBtn.textContent = running ? "Stop SOI" : "Start SOI";
       soiState.classList.toggle("on", !!running);
       soiState.textContent = running ? "Running" : "Idle";
+    }
+
+    function setChatBusy(on) {
+      busy = !!on;
+      sendBtn.disabled = false;
+      sendBtn.classList.toggle("stop", busy);
+      sendBtn.textContent = busy ? "Stop" : "Send";
+      sendBtn.type = busy ? "button" : "submit";
     }
 
     async function pullSoiLog() {
@@ -982,10 +1380,12 @@
     }
 
     async function streamChat(message, botMsg, onDone) {
+      chatAbort = new AbortController();
       const r = await fetch("/api/chat-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, voice: false }),
+        signal: chatAbort.signal,
       });
       if (!r.ok || !r.body) {
         throw new Error("chat-stream failed (" + r.status + ")");
@@ -996,6 +1396,7 @@
       let full = "";
       let donePayload = null;
       let err = null;
+      let aborted = false;
       const body = botMsg._body;
 
       const handleEvent = (ev) => {
@@ -1013,70 +1414,107 @@
           }
           if (!full && body.textContent === "…") body.textContent = "";
           full += t;
-          appendFlow(body, t);
-          logEl.scrollTop = logEl.scrollHeight;
+          scheduleLiveMarkdown(body, () => full);
         } else if (ev.type === "done") {
           donePayload = ev;
-          body.classList.remove("streaming");
           if (!full) {
-            const reply = asText(ev.reply) || "(empty reply)";
-            body.textContent = reply;
-            full = reply;
+            full = asText(ev.reply) || (ev.cancelled ? "(stopped)" : "(empty reply)");
           }
+          if (ev.cancelled && full && !/\(stopped\)\s*$/.test(full)) {
+            full = full.replace(/\s*$/, "") + "\n\n(stopped)";
+          }
+          flushLiveMarkdown(body, full);
           if (typeof onDone === "function") onDone();
         } else if (ev.type === "error") {
           err = asText(ev.error || "Error");
+          if (body._mdTimer) {
+            clearTimeout(body._mdTimer);
+            body._mdTimer = null;
+          }
           body.classList.remove("streaming");
           if (typeof onDone === "function") onDone();
         }
       };
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf("\n\n")) >= 0) {
-          const raw = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const line = raw.split("\n").find((l) => l.startsWith("data:"));
-          if (!line) continue;
-          const payload = line.slice(5).trim();
-          if (!payload) continue;
-          try { handleEvent(JSON.parse(payload)); }
-          catch (e) {}
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            const raw = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            const line = raw.split("\n").find((l) => l.startsWith("data:"));
+            if (!line) continue;
+            const payload = line.slice(5).trim();
+            if (!payload) continue;
+            try { handleEvent(JSON.parse(payload)); }
+            catch (e) {}
+          }
         }
+      } catch (e) {
+        if (e && e.name === "AbortError") aborted = true;
+        else throw e;
+      }
+      if (body._mdTimer) {
+        clearTimeout(body._mdTimer);
+        body._mdTimer = null;
       }
       body.classList.remove("streaming");
       if (err) throw new Error(err);
+      if (aborted) {
+        if (!full) full = "(stopped)";
+        else if (!/\(stopped\)\s*$/.test(full)) full = full.replace(/\s*$/, "") + "\n\n(stopped)";
+        flushLiveMarkdown(body, full);
+        return { ok: true, reply: full, cancelled: true };
+      }
+      if (full && !body.classList.contains("md")) {
+        flushLiveMarkdown(body, full);
+      }
       return donePayload || { ok: true, reply: full };
     }
+
+    async function stopChat() {
+      try { await post("/api/cancel", { chat: true, soi: false }); } catch (e) {}
+      if (chatAbort) {
+        try { chatAbort.abort(); } catch (e) {}
+      }
+    }
+
+    sendBtn.addEventListener("click", async (e) => {
+      if (!busy) return;
+      e.preventDefault();
+      e.stopPropagation();
+      await stopChat();
+    });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const text = input.value.trim();
       if (!text || busy) return;
-      busy = true;
-      sendBtn.disabled = true;
+      setChatBusy(true);
       addMessage(text, "user");
       input.value = "";
       const botMsg = addMessage("…", "bot");
       botMsg._body.classList.add("sys");
       const unlockSend = () => {
-        if (!busy) return;
-        busy = false;
-        sendBtn.disabled = false;
+        chatAbort = null;
+        setChatBusy(false);
         input.focus();
       };
       try {
         const data = await streamChat(text, botMsg, unlockSend);
         if (data && data.ok === false) {
           botMsg.classList.add("error");
+          botMsg._body.classList.add("plain");
+          botMsg._body.classList.remove("md", "sys");
           botMsg._body.textContent = data.error || "Error";
         } else if (data) renderMeta(data);
       } catch (err) {
         botMsg.classList.add("error");
-        botMsg._body.classList.remove("sys");
+        botMsg._body.classList.add("plain");
+        botMsg._body.classList.remove("md", "sys");
         botMsg._body.textContent = String(err);
       } finally {
         unlockSend();
@@ -1100,6 +1538,17 @@
     });
 
     soiBtn.addEventListener("click", async () => {
+      if (soiBtn.classList.contains("stop-soi")) {
+        try {
+          const data = await post("/api/cancel", { chat: false, soi: true });
+          addMessage("SOI stop requested", "sys");
+          setSoiUi(!!data.soi_running);
+          refreshStatus();
+        } catch (err) {
+          addMessage(asText(err), "sys");
+        }
+        return;
+      }
       setSoiUi(true);
       try {
         const data = await post("/api/soi", {});

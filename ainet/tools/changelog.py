@@ -195,6 +195,7 @@ def mark_soi_status(
     """Mark entries filed|discarded, copy them to Masterlog, remove from Changelog queue.
 
     Masterlog is append-only and never deleted. Changelog is the pending oac_turn queue.
+    dest_by_id values may be a path string or a list of paths for multi-location filing.
     """
     if status not in {"pending", "filed", "discarded"}:
         raise ValueError(f"Invalid soi_status: {status}")
@@ -202,10 +203,10 @@ def mark_soi_status(
     if not wanted:
         return 0
     dest_by_id = dest_by_id or {}
-    data = _load(paths)
     now = _utc_now()
 
     if status == "pending":
+        data = _load(paths)
         updated = 0
         for entry in data["entries"]:
             if not isinstance(entry, dict):
@@ -218,6 +219,7 @@ def mark_soi_status(
             _save(paths, data)
         return updated
 
+    data = _load(paths)
     keep: list[Any] = []
     archived: list[dict[str, Any]] = []
     updated = 0
@@ -234,7 +236,12 @@ def mark_soi_status(
         row["soi_processed_at"] = now
         row["archived_at"] = now
         if eid in dest_by_id:
-            row["filed_to"] = dest_by_id[eid]
+            dest = dest_by_id[eid]
+            if isinstance(dest, list):
+                cleaned = [str(x).replace("\\", "/").strip() for x in dest if str(x).strip()]
+                row["filed_to"] = cleaned[0] if len(cleaned) == 1 else cleaned
+            else:
+                row["filed_to"] = dest
         archived.append(row)
         updated += 1
     if updated:

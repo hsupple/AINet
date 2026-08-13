@@ -27,6 +27,8 @@ class OllamaConfig:
     auto_mode: bool = True
     auto_mode_min_confidence: float = 0.7
     max_history_messages: int = 16
+    # Soft character budget for non-system dialogue sent to the model (keeps 8B responsive).
+    max_history_chars: int = 12000
     max_tool_result_chars: int = 1500
     lean_topic_context: bool = True
     # Dual-AI
@@ -57,6 +59,7 @@ class OllamaConfig:
             auto_mode=os.environ.get("AINET_AUTO_MODE", "1") not in {"0", "false", "False"},
             auto_mode_min_confidence=float(os.environ.get("AINET_AUTO_MODE_MIN_CONF", "0.7")),
             max_history_messages=int(os.environ.get("AINET_MAX_HISTORY_MESSAGES", "16")),
+            max_history_chars=int(os.environ.get("AINET_MAX_HISTORY_CHARS", "12000")),
             max_tool_result_chars=int(os.environ.get("AINET_MAX_TOOL_RESULT_CHARS", "1500")),
             lean_topic_context=os.environ.get("AINET_LEAN_TOPIC", "1") not in {"0", "false", "False"},
             persist_oac_conversation=os.environ.get("AINET_PERSIST_OAC", "1")

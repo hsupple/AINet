@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import parse_qs, urlparse
 
-from ollama.client import OllamaError
+from ollama.client import OllamaCancelled, OllamaError
 from ollama.config import OllamaConfig
 from ollama.idle import IdleSOIWatcher
 from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
@@ -187,16 +187,35 @@ class ChatApp:
 
         def _run() -> None:
             reply = ""
+            cancelled = False
+            acquired = False
             try:
-                # Keep ChatApp.lock free during inference so /api/status and SOI logs
-                # do not freeze while Ollama (or SOI) is busy.
-                with self._ask_lock:
+                # Serialize asks, but don't wait forever if a prior turn is wedged.
+                acquired = self._ask_lock.acquire(timeout=2.0)
+                if not acquired:
+                    # Prior ask likely stuck; force-cancel so the gate can free.
+                    self.session.request_cancel()
+                    acquired = self._ask_lock.acquire(timeout=8.0)
+                    if not acquired:
+                        events.put(
+                            {
+                                "type": "error",
+                                "error": "Chat is still busy — press Stop, then try again",
+                            }
+                        )
+                        return
+                try:
                     reply = self.session.ask(
                         text,
                         stream=True,
                         on_token=_on_token,
                         on_tool=_on_tool,
                     )
+                    cancelled = self.session.cancelled()
+                finally:
+                    if acquired:
+                        self._ask_lock.release()
+                        acquired = False
                 self._append_raw(
                     source="oac",
                     user=text,
@@ -208,6 +227,7 @@ class ChatApp:
                         "type": "done",
                         "ok": True,
                         "reply": reply,
+                        "cancelled": cancelled,
                         "mode": self.session.mode.id,
                         "session_id": self.session.session_id,
                         "soi_running": self.watcher.running,
@@ -215,19 +235,63 @@ class ChatApp:
                     }
                 done_payload.update(self.tts_status())
                 events.put(done_payload)
+            except OllamaCancelled:
+                events.put(
+                    {
+                        "type": "done",
+                        "ok": True,
+                        "reply": "(stopped)",
+                        "cancelled": True,
+                        "mode": self.session.mode.id,
+                        "session_id": self.session.session_id,
+                        "soi_running": self.watcher.running,
+                        "voice": False,
+                    }
+                )
             except OllamaError as exc:
                 events.put({"type": "error", "error": str(exc)})
             except Exception as exc:
                 events.put({"type": "error", "error": str(exc)})
             finally:
+                if acquired:
+                    try:
+                        self._ask_lock.release()
+                    except RuntimeError:
+                        pass
                 events.put(None)
 
         threading.Thread(target=_run, name="ainet-chat-stream", daemon=True).start()
+        idle_s = 0.0
+        stall_limit_s = 90.0
         while True:
-            item = events.get()
+            try:
+                item = events.get(timeout=1.0)
+            except queue.Empty:
+                idle_s += 1.0
+                if idle_s >= stall_limit_s:
+                    self.session.request_cancel()
+                    yield {
+                        "type": "error",
+                        "error": (
+                            "Model stalled with no output — context may be too long. "
+                            "Try New session, or send a shorter follow-up."
+                        ),
+                    }
+                    break
+                continue
+            idle_s = 0.0
             if item is None:
                 break
             yield item
+
+    def cancel(self, *, chat: bool = True, soi: bool = True) -> dict[str, Any]:
+        out: dict[str, Any] = {"ok": True, "chat": False, "soi": False}
+        if chat:
+            self.session.request_cancel()
+            out["chat"] = True
+        if soi:
+            out["soi"] = bool(self.watcher.cancel_job().get("stopped"))
+        return {**out, **self.status()}
 
     def reset(self) -> dict[str, Any]:
         with self.lock:
@@ -411,7 +475,16 @@ def make_handler(app: ChatApp):
                         self.wfile.write(f"data: {blob}\n\n".encode("utf-8"))
                         self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                    app.cancel(chat=True, soi=False)
                     return
+                return
+            if path == "/api/cancel":
+                chat = data.get("chat", True)
+                soi = data.get("soi", True)
+                status, body, ctype = _json_bytes(
+                    app.cancel(chat=bool(chat), soi=bool(soi))
+                )
+                self._send(status, body, ctype)
                 return
             if path == "/api/reset":
                 status, body, ctype = _json_bytes(app.reset())

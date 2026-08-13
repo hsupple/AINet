@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
 from ainet.tools.ops import DatabaseTools
 from ainet.tools.registry import catalog_tools, dispatch, tools_subset
-from ollama.client import OllamaClient, ThinkingCallback, TokenCallback
+from ollama.client import OllamaCancelled, OllamaClient, ThinkingCallback, TokenCallback
 from ollama.content_filing import cop_name_in_text
 from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
@@ -76,6 +77,20 @@ class ChatSession:
                 limit=max(2, self.config.max_history_messages // 2),
             )
             self.messages.extend(prior)
+        self.cancel_event = threading.Event()
+
+    def request_cancel(self) -> None:
+        self.cancel_event.set()
+        try:
+            self.client.cancel_active()
+        except Exception:
+            pass
+
+    def clear_cancel(self) -> None:
+        self.cancel_event.clear()
+
+    def cancelled(self) -> bool:
+        return self.cancel_event.is_set()
 
     def touch(self) -> None:
         self.last_activity = time.monotonic()
@@ -155,15 +170,18 @@ class ChatSession:
         if route_note and on_token is not None:
             on_token(f"{route_note}\n")
 
+        self.clear_cancel()
         self.messages.append({"role": "user", "content": user_text})
         self._trim_history()
 
         tools = self._active_tools()
         final_text = ""
         streamed_any = False
+        streamed_parts: list[str] = []
         self.last_tool_names: list[str] = []
         self.last_mutating_calls: list[dict[str, Any]] = []
         self.last_tool_rounds = 0
+        seen_tool_keys: set[str] = set()
         think = self.config.soi_think if self.mode.role == "soi" else self.config.oac_think
         req_timeout = (
             self.config.soi_timeout_s if self.mode.role == "soi" else self.config.timeout_s
@@ -172,6 +190,8 @@ class ChatSession:
         def _token(delta: str) -> None:
             nonlocal streamed_any
             streamed_any = True
+            if delta:
+                streamed_parts.append(delta)
             if on_token:
                 on_token(delta)
 
@@ -185,89 +205,150 @@ class ChatSession:
             else None
         )
 
-        for _round in range(self.config.max_tool_rounds):
-            if stream or on_token or on_thinking:
-                response = self.client.chat_stream(
-                    self.messages,
-                    tools=tools,
-                    think=think,
-                    on_token=_token if on_token else None,
-                    on_thinking=on_thinking,
-                    timeout_s=req_timeout,
-                    options=soi_opts,
-                )
-            else:
-                response = self.client.chat(
-                    self.messages,
-                    tools=tools,
-                    think=think,
-                    timeout_s=req_timeout,
-                    options=soi_opts,
-                )
-            message = response.get("message") or {}
-            self.messages.append(message)
+        try:
+            for _round in range(self.config.max_tool_rounds):
+                if self.cancelled():
+                    raise OllamaCancelled("Cancelled")
+                self._trim_history()
+                if stream or on_token or on_thinking:
+                    response = self.client.chat_stream(
+                        self.messages,
+                        tools=tools,
+                        think=think,
+                        on_token=_token if on_token else None,
+                        on_thinking=on_thinking,
+                        timeout_s=req_timeout,
+                        options=soi_opts,
+                        should_cancel=self.cancelled,
+                    )
+                else:
+                    response = self.client.chat(
+                        self.messages,
+                        tools=tools,
+                        think=think,
+                        timeout_s=req_timeout,
+                        options=soi_opts,
+                    )
+                message = response.get("message") or {}
+                self.messages.append(message)
 
-            tool_calls = message.get("tool_calls") or []
-            parsed_from_text = False
-            if not tool_calls:
-                final_text = (message.get("content") or "").strip()
-                if self.mode.role == "soi":
-                    tool_calls = parse_content_tool_calls(final_text)
-                    parsed_from_text = bool(tool_calls)
+                tool_calls = message.get("tool_calls") or []
+                parsed_from_text = False
                 if not tool_calls:
-                    break
+                    final_text = (message.get("content") or "").strip()
+                    if self.mode.role == "soi":
+                        tool_calls = parse_content_tool_calls(final_text)
+                        parsed_from_text = bool(tool_calls)
+                    if not tool_calls:
+                        break
 
-            self.last_tool_rounds += 1
-            if streamed_any and on_token:
-                on_token("\n")
-                streamed_any = False
-            elif streamed_any and on_thinking and not on_token:
-                on_thinking("\n")
+                self.last_tool_rounds += 1
+                if streamed_any and on_token:
+                    on_token("\n")
+                    streamed_any = False
+                elif streamed_any and on_thinking and not on_token:
+                    on_thinking("\n")
 
-            for call in tool_calls:
-                name, args = self._tool_call_parts(call)
-                if self.mode.role == "soi":
-                    name, args = normalize_soi_tool(name, args)
-                    call = {"function": {"name": name, "arguments": args}}
-                if not name:
-                    continue
-                if on_tool:
-                    on_tool("start", name, {"arguments": args})
-                result = self._run_tool_call(call)
-                self.last_tool_names.append(name)
-                if name in _MUTATING or name in extra_mutating:
-                    self.last_mutating_calls.append(
+                for call in tool_calls:
+                    if self.cancelled():
+                        raise OllamaCancelled("Cancelled")
+                    name, args = self._tool_call_parts(call)
+                    if self.mode.role == "soi":
+                        name, args = normalize_soi_tool(name, args)
+                        call = {"function": {"name": name, "arguments": args}}
+                    if not name:
+                        continue
+                    tool_key = self._tool_call_key(name, args)
+                    if tool_key in seen_tool_keys:
+                        # Model asked for the same tool+args again — don't re-run; nudge it.
+                        result = {
+                            "ok": True,
+                            "duplicate": True,
+                            "error": None,
+                            "hint": (
+                                "You already ran this tool with the same arguments in this turn. "
+                                "Use the earlier tool result and answer the user now "
+                                "(open useful links with open_chrome if helpful)."
+                            ),
+                        }
+                        if on_tool:
+                            on_tool("start", name, {"arguments": args})
+                            on_tool(
+                                "done",
+                                name,
+                                {"ok": True, "summary": "duplicate — use prior result"},
+                            )
+                        self.messages.append(
+                            {
+                                "role": "tool",
+                                "content": json.dumps(result, ensure_ascii=False),
+                            }
+                        )
+                        continue
+                    seen_tool_keys.add(tool_key)
+                    if on_tool:
+                        on_tool("start", name, {"arguments": args})
+                    result = self._run_tool_call(call)
+                    self.last_tool_names.append(name)
+                    if name in _MUTATING or name in extra_mutating:
+                        self.last_mutating_calls.append(
+                            {
+                                "tool": name,
+                                "args": args,
+                                "ok": bool(result.get("ok", True)) if isinstance(result, dict) else True,
+                                "result": result if isinstance(result, dict) else {},
+                            }
+                        )
+                    if name in {"get_tools", "getTools"} and self.mode.role != "soi":
+                        self.full_tools_unlocked = True
+                        tools = self._active_tools()
+                    if on_tool:
+                        on_tool(
+                            "done",
+                            name,
+                            {
+                                "ok": bool(result.get("ok", True)),
+                                "summary": self._tool_result_summary(name, result),
+                            },
+                        )
+                    payload = self._truncate_tool_result(result)
+                    self.messages.append(
                         {
-                            "tool": name,
-                            "args": args,
-                            "ok": bool(result.get("ok", True)) if isinstance(result, dict) else True,
-                            "result": result if isinstance(result, dict) else {},
+                            "role": "tool",
+                            "content": json.dumps(payload, ensure_ascii=False),
                         }
                     )
-                if name in {"get_tools", "getTools"} and self.mode.role != "soi":
-                    self.full_tools_unlocked = True
-                    tools = self._active_tools()
-                if on_tool:
-                    on_tool(
-                        "done",
-                        name,
-                        {
-                            "ok": bool(result.get("ok", True)),
-                            "summary": self._tool_result_summary(name, result),
-                        },
-                    )
-                payload = self._truncate_tool_result(result)
-                self.messages.append(
-                    {
-                        "role": "tool",
-                        "content": json.dumps(payload, ensure_ascii=False),
-                    }
-                )
-            if parsed_from_text:
-                break
-            self._trim_history()
-        else:
-            final_text = "I hit the tool-call limit for this turn. Try again with a narrower ask."
+                if parsed_from_text:
+                    break
+                self._trim_history()
+            else:
+                final_text = "I hit the tool-call limit for this turn. Try again with a narrower ask."
+        except OllamaCancelled:
+            partial = "".join(streamed_parts).strip()
+            if partial:
+                final_text = partial
+                if not (self.messages and self.messages[-1].get("role") == "assistant"):
+                    self.messages.append({"role": "assistant", "content": final_text})
+            else:
+                # Drop the unanswered user turn so a retry is clean.
+                if self.messages and self.messages[-1].get("role") == "user":
+                    self.messages.pop()
+                raise
+
+        if not (final_text or "").strip() and self.last_tool_names:
+            chrome_n = sum(1 for n in self.last_tool_names if n == "open_chrome")
+            if chrome_n and all(n == "open_chrome" for n in self.last_tool_names):
+                final_text = "Opened in Chrome." if chrome_n == 1 else f"Opened {chrome_n} tabs in Chrome."
+            elif chrome_n:
+                final_text = f"Done — opened {chrome_n} Chrome tab(s)."
+            if final_text and on_token is not None:
+                on_token(final_text)
+            if final_text:
+                if self.messages and self.messages[-1].get("role") == "assistant":
+                    if not str(self.messages[-1].get("content") or "").strip():
+                        self.messages[-1]["content"] = final_text
+                else:
+                    self.messages.append({"role": "assistant", "content": final_text})
 
         if self.store and self.mode.role == "oac":
             if not self.session_id or not self.store.session_exists(self.session_id):
@@ -309,6 +390,14 @@ class ChatSession:
         return name, args if isinstance(args, dict) else {}
 
     @staticmethod
+    def _tool_call_key(name: str, args: dict[str, Any]) -> str:
+        try:
+            raw = json.dumps(args or {}, ensure_ascii=False, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            raw = str(args)
+        return f"{name}:{raw}"
+
+    @staticmethod
     def _tool_result_summary(name: str, result: dict[str, Any]) -> str:
         if not result.get("ok", True):
             if result.get("error"):
@@ -318,7 +407,12 @@ class ChatSession:
             n = result.get("count")
             if n is None and isinstance(result.get("results"), list):
                 n = len(result["results"])
-            return f"{n} hits" if n is not None else "ok"
+            base = f"{n} hits" if n is not None else "ok"
+            if result.get("cached"):
+                base += " (cached)"
+            if result.get("duplicate"):
+                return "already searched — use prior result"
+            return base
         if name == "web_fetch":
             text = result.get("text") or ""
             return f"{len(text)} chars"
@@ -346,12 +440,111 @@ class ChatSession:
         return None
 
     def _trim_history(self) -> None:
+        """Keep recent dialogue under a message/char budget without breaking tool sequences."""
         system = [m for m in self.messages if m.get("role") == "system"]
-        rest = [m for m in self.messages if m.get("role") != "system"]
-        limit = max(4, self.config.max_history_messages)
-        if len(rest) > limit:
-            rest = rest[-limit:]
+        rest = [self._compact_message(m) for m in self.messages if m.get("role") != "system"]
+        rest = self._drop_orphan_tools(rest)
+
+        msg_limit = max(4, self.config.max_history_messages)
+        char_limit = max(2000, int(getattr(self.config, "max_history_chars", 12000) or 12000))
+
+        last_user = 0
+        for i, m in enumerate(rest):
+            if m.get("role") == "user":
+                last_user = i
+        head, tail = rest[:last_user], rest[last_user:]
+
+        while len(head) + len(tail) > msg_limit and head:
+            nxt = self._drop_oldest_turn(head)
+            if nxt == head:
+                head = head[1:]
+            else:
+                head = nxt
+        while head and self._dialogue_chars(head) + self._dialogue_chars(tail) > char_limit:
+            nxt = self._drop_oldest_turn(head)
+            if nxt == head:
+                head = head[1:]
+            else:
+                head = nxt
+
+        rest = self._drop_orphan_tools(head + tail)
         self.messages = system + rest
+
+    @staticmethod
+    def _dialogue_chars(messages: list[dict[str, Any]]) -> int:
+        total = 0
+        for m in messages:
+            total += len(str(m.get("content") or ""))
+            tools = m.get("tool_calls")
+            if tools:
+                try:
+                    total += len(json.dumps(tools, ensure_ascii=False))
+                except (TypeError, ValueError):
+                    total += 200
+        return total
+
+    @staticmethod
+    def _compact_message(message: dict[str, Any]) -> dict[str, Any]:
+        """Shrink oversized message bodies so long chats stay model-friendly."""
+        out = dict(message)
+        content = out.get("content")
+        if isinstance(content, str) and len(content) > 4000:
+            out["content"] = content[:4000] + "…"
+        # Thinking blobs are unused for follow-up turns and burn context.
+        out.pop("thinking", None)
+        return out
+
+    @staticmethod
+    def _has_tool_calls(message: dict[str, Any]) -> bool:
+        tools = message.get("tool_calls")
+        return isinstance(tools, list) and bool(tools)
+
+    def _drop_orphan_tools(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Remove tool results that aren't preceded by an assistant tool_calls message."""
+        kept: list[dict[str, Any]] = []
+        pending_tools = 0
+        for m in messages:
+            role = m.get("role")
+            if role == "assistant" and self._has_tool_calls(m):
+                # Previous assistant tool_calls never received its results — drop it.
+                if pending_tools > 0 and kept and kept[-1].get("role") == "assistant" and self._has_tool_calls(kept[-1]):
+                    kept.pop()
+                pending_tools = len(m.get("tool_calls") or [])
+                kept.append(m)
+                continue
+            if role == "tool":
+                if pending_tools > 0:
+                    kept.append(m)
+                    pending_tools -= 1
+                # else: orphan tool result — skip
+                continue
+            # New user/assistant prose — reset pending tool expectations.
+            pending_tools = 0
+            kept.append(m)
+        # Incomplete tail: assistant tool_calls with no results yet (mid-flight) — keep it.
+        # Only drop if it has tool_calls AND we somehow have zero following tools while
+        # pending_tools still equals the full call count (no results appended).
+        if (
+            pending_tools > 0
+            and kept
+            and kept[-1].get("role") == "assistant"
+            and self._has_tool_calls(kept[-1])
+            and pending_tools == len(kept[-1].get("tool_calls") or [])
+        ):
+            # No results followed this tool_calls message — drop the incomplete call.
+            kept.pop()
+        return kept
+
+    def _drop_oldest_turn(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop the oldest user→… block (including any tool sequence under it)."""
+        if len(messages) <= 2:
+            return messages[-2:] if len(messages) == 2 else messages
+        # Find second user message; keep from there. If none, drop first message safely.
+        user_idxs = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+        if len(user_idxs) >= 2:
+            return messages[user_idxs[1] :]
+        # No clean user boundary — drop from the front until role changes past first item.
+        return messages[1:]
 
     def _truncate_tool_result(self, result: dict[str, Any]) -> dict[str, Any]:
         raw = json.dumps(result, ensure_ascii=False)

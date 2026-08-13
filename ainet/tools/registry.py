@@ -404,7 +404,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "open_chrome",
             "description": (
                 "Open an http(s) URL as a new tab in Google Chrome on this PC. "
-                "Use when the user asks to open, show, or pull up a page/link in the browser."
+                "Be generous: open useful pages often (search results, sources, products, docs, "
+                "maps, videos, references) — prefer more tabs over fewer. Call once per URL. "
+                "Also use when the user asks to open, show, or pull up a page/link."
             ),
             "parameters": {
                 "type": "object",
@@ -450,9 +452,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "file_note",
             "description": (
-                "Phase 1 filing — preferred for SOI test. Pass entry_id, dest (simple label), "
+                "Phase 1 filing — preferred for SOI. Pass entry_id, dest (simple label), "
                 "and text (a short note YOU write about the turn). Host stores the note in "
                 "<folder>/Notes.json with id as evidence, and the raw message + id in History.json. "
+                "Call again with the same entry_id and a different dest when the turn belongs "
+                "in multiple folders (e.g. Preferences + Pantry). "
                 "dest examples: Values, Memories, Psychology, Habits, Desires, Pantry, discard."
             ),
             "parameters": {

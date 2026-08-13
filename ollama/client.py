@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -19,9 +20,26 @@ class OllamaError(RuntimeError):
     """Raised when the Ollama server returns an error or is unreachable."""
 
 
+class OllamaCancelled(OllamaError):
+    """Raised when the caller cancels an in-flight stream."""
+
+
 class OllamaClient:
     def __init__(self, config: OllamaConfig) -> None:
         self.config = config
+        self._active_resp: Any | None = None
+        self._active_lock = threading.Lock()
+
+    def cancel_active(self) -> None:
+        """Close any in-flight Ollama HTTP stream so a blocked read can unblock."""
+        with self._active_lock:
+            resp = self._active_resp
+        if resp is None:
+            return
+        try:
+            resp.close()
+        except Exception:
+            pass
 
     def chat(
         self,
@@ -55,6 +73,7 @@ class OllamaClient:
         on_thinking: ThinkingCallback | None = None,
         timeout_s: float | None = None,
         options: dict[str, Any] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """Stream assistant tokens (+ optional thinking); return final chat shape."""
         return self._chat_request(
@@ -67,6 +86,7 @@ class OllamaClient:
             on_thinking=on_thinking,
             timeout_s=timeout_s,
             options=options,
+            should_cancel=should_cancel,
         )
 
     def _chat_request(
@@ -81,6 +101,7 @@ class OllamaClient:
         on_thinking: ThinkingCallback | None = None,
         timeout_s: float | None = None,
         options: dict[str, Any] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         use_think = bool(self.config.oac_think if think is None else think)
         wait = float(self.config.timeout_s if timeout_s is None else timeout_s)
@@ -106,17 +127,27 @@ class OllamaClient:
         )
         try:
             with urllib.request.urlopen(req, timeout=wait) as resp:
-                if not stream:
-                    body = resp.read().decode("utf-8")
-                    try:
-                        return json.loads(body)
-                    except json.JSONDecodeError as exc:
-                        raise OllamaError(f"Ollama returned non-JSON: {body[:200]}") from exc
-                return self._consume_stream(
-                    resp,
-                    on_token=on_token,
-                    on_thinking=on_thinking,
-                )
+                with self._active_lock:
+                    self._active_resp = resp
+                try:
+                    if not stream:
+                        body = resp.read().decode("utf-8")
+                        try:
+                            return json.loads(body)
+                        except json.JSONDecodeError as exc:
+                            raise OllamaError(f"Ollama returned non-JSON: {body[:200]}") from exc
+                    return self._consume_stream(
+                        resp,
+                        on_token=on_token,
+                        on_thinking=on_thinking,
+                        should_cancel=should_cancel,
+                    )
+                finally:
+                    with self._active_lock:
+                        if self._active_resp is resp:
+                            self._active_resp = None
+        except OllamaCancelled:
+            raise
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise OllamaError(f"Ollama HTTP {exc.code}: {detail}") from exc
@@ -140,12 +171,27 @@ class OllamaClient:
             return True
         return "timed out" in str(reason).lower()
 
+    @staticmethod
+    def _set_read_timeout(resp: Any, seconds: float) -> None:
+        """Wake blocked stream reads periodically so cancel can be honored."""
+        try:
+            fp = getattr(resp, "fp", None)
+            raw = getattr(fp, "raw", None) if fp is not None else None
+            sock = getattr(raw, "_sock", None) if raw is not None else None
+            if sock is None and fp is not None:
+                sock = getattr(fp, "_sock", None)
+            if sock is not None:
+                sock.settimeout(seconds)
+        except Exception:
+            pass
+
     def _consume_stream(
         self,
         resp: Any,
         *,
         on_token: TokenCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """Read NDJSON chat stream; accumulate final message (incl. tool_calls)."""
         role = "assistant"
@@ -153,8 +199,25 @@ class OllamaClient:
         thinking_parts: list[str] = []
         tool_calls: list[dict[str, Any]] = []
         meta: dict[str, Any] = {}
+        self._set_read_timeout(resp, 1.0)
 
-        for raw in resp:
+        while True:
+            if should_cancel and should_cancel():
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+                raise OllamaCancelled("Cancelled")
+            try:
+                raw = resp.readline()
+            except socket.timeout:
+                continue
+            except (OSError, ValueError) as exc:
+                if should_cancel and should_cancel():
+                    raise OllamaCancelled("Cancelled") from exc
+                raise OllamaError(f"Ollama stream interrupted: {exc}") from exc
+            if not raw:
+                break
             line = raw.decode("utf-8", errors="replace").strip()
             if not line:
                 continue

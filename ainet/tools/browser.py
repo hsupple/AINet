@@ -17,6 +17,12 @@ _CHROME_CANDIDATES = (
     Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
 )
 
+# Windows: break out of the parent job object so Chrome is not deferred until Python exits.
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+_DETACHED_PROCESS = 0x00000008
+_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+_CREATE_NO_WINDOW = 0x08000000
+
 
 def _normalize_url(url: str) -> str:
     text = (url or "").strip()
@@ -45,25 +51,36 @@ def open_chrome(url: str, *, new_tab: bool = True) -> dict[str, Any]:
     if not chrome:
         raise ValueError("Google Chrome not found on this machine")
 
-    args = [chrome]
-    if new_tab:
-        args.append("--new-tab")
-    args.append(target)
-
-    creationflags = 0
     if sys.platform == "win32":
-        creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        # `cmd /c start` returns immediately and detaches Chrome from this process tree.
+        # Direct chrome.exe Popen often stays tied to the Python job, so tabs only appear
+        # when the chat server exits.
+        start_args = ["cmd", "/c", "start", "", chrome]
+        if new_tab:
+            start_args.append("--new-tab")
+        start_args.append(target)
+        subprocess.Popen(
+            start_args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP | _CREATE_BREAKAWAY_FROM_JOB,
+            close_fds=False,
+        )
+    else:
+        args = [chrome]
+        if new_tab:
+            args.append("--new-tab")
+        args.append(target)
+        subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
         )
 
-    subprocess.Popen(
-        args,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        creationflags=creationflags,
-        close_fds=True,
-    )
     return {
         "ok": True,
         "opened": True,

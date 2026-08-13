@@ -29,6 +29,7 @@ class IdleSOIWatcher:
         self.error_backoff_s = error_backoff_s
         self._stop = threading.Event()
         self._kick = threading.Event()
+        self._cancel_job = threading.Event()
         self._active = threading.Event()
         self._busy = threading.Lock()
         self._next_ok_at = 0.0
@@ -53,28 +54,28 @@ class IdleSOIWatcher:
         return True
 
     def request_run(self) -> dict[str, bool | str]:
-        """Request filing when OAC idle threshold is met (used by Start SOI)."""
+        """Start filing now (Start SOI) — bypasses the automatic idle wait."""
         if not self.start(force=True):
             return {"started": False, "reason": "watcher failed to start"}
         if self.busy:
             return {"started": False, "reason": "already running"}
-        idle = self.session.idle_seconds()
-        need = float(self.config.soi_idle_seconds)
-        if idle < need:
-            left = need - idle
-            return {
-                "started": False,
-                "reason": (
-                    f"OAC must be idle {need:.0f}s before SOI "
-                    f"(now {idle:.0f}s, {left:.0f}s left)"
-                ),
-            }
+        self._cancel_job.clear()
         self._active.set()
         self._kick.set()
         return {"started": True}
 
+    def cancel_job(self) -> dict[str, bool | str]:
+        """Stop an in-flight SOI filing/refresh as soon as practical."""
+        self._cancel_job.set()
+        self._kick.clear()
+        if not self.busy:
+            self._active.clear()
+            return {"stopped": True, "reason": "SOI was idle"}
+        return {"stopped": True, "reason": "cancel requested"}
+
     def stop(self) -> None:
         self._stop.set()
+        self._cancel_job.set()
         self._kick.set()
         self._active.clear()
 
@@ -102,19 +103,24 @@ class IdleSOIWatcher:
                     self._kick.set()
                 continue
             try:
-                # Filing only after OAC idle threshold — kicks cannot bypass this.
-                if (
-                    worker.has_filing_work()
-                    and idle >= self.config.soi_idle_seconds
-                ):
+                # Auto-filing waits for OAC idle; Start SOI (kick) runs immediately.
+                can_file = worker.has_filing_work() and (
+                    kicked or idle >= self.config.soi_idle_seconds
+                )
+                worker.cancel_event = self._cancel_job
+                if can_file:
                     logger.log(
                         "idle_wake",
                         phase="filing",
                         idle_s=idle,
+                        kicked=bool(kicked),
                         pending_changelog=len(worker.pending_changelog()),
                         pending_inbox=len(worker.pending_inbox()),
                     )
                     result = worker.run_filing()
+                    if result.get("cancelled"):
+                        logger.log("filing_skip", reason="cancelled")
+                        continue
                     if not result.get("ok"):
                         self._next_ok_at = time.monotonic() + self.error_backoff_s
                         logger.log(
@@ -133,21 +139,12 @@ class IdleSOIWatcher:
                         )
                     continue
 
-                if kicked and worker.has_filing_work() and idle < self.config.soi_idle_seconds:
-                    logger.log(
-                        "filing_skip",
-                        reason=(
-                            f"waiting for OAC idle "
-                            f"({idle:.0f}s / {self.config.soi_idle_seconds:.0f}s)"
-                        ),
-                    )
-                    continue
-
                 if (
                     not worker.has_filing_work()
                     and worker.needs_read_refresh()
                     and idle >= self.config.soi_read_refresh_idle_seconds
                 ):
+                    worker.cancel_event = self._cancel_job
                     logger.log(
                         "idle_wake",
                         phase="read_refresh",
@@ -155,6 +152,9 @@ class IdleSOIWatcher:
                         stale_count=len(worker.list_stale_read_paths()),
                     )
                     result = worker.run_read_refresh()
+                    if result.get("cancelled"):
+                        logger.log("read_refresh_skip", reason="cancelled")
+                        continue
                     if not result.get("ok"):
                         self._next_ok_at = time.monotonic() + self.error_backoff_s
                         logger.log(

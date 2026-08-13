@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -13,7 +14,7 @@ from ainet.tools import readlog
 from ainet.tools.fsutil import atomic_write_text
 from ainet.tools.ops import DatabaseTools
 from ainet.tools.registry import dispatch
-from ollama.client import OllamaClient, OllamaError
+from ollama.client import OllamaCancelled, OllamaClient, OllamaError
 from ollama.config import OllamaConfig
 from ollama.modes import get_mode
 from ollama.content_filing import (
@@ -69,6 +70,27 @@ def _is_ephemeral_entry(entry: dict[str, Any]) -> bool:
     return is_ephemeral_text(_entry_user_text(entry))
 
 
+def _add_dest(dest_by_id: dict[str, Any], eid: str, path: str) -> None:
+    """Record one or more filing destinations for a changelog id."""
+    path = str(path or "").replace("\\", "/").strip()
+    if not eid:
+        return
+    if not path:
+        dest_by_id.setdefault(eid, "")
+        return
+    cur = dest_by_id.get(eid)
+    if not cur:
+        dest_by_id[eid] = path
+        return
+    if isinstance(cur, list):
+        if path not in cur:
+            cur.append(path)
+        return
+    if cur == path:
+        return
+    dest_by_id[eid] = [cur, path]
+
+
 class SOIWorker:
     def __init__(
         self,
@@ -90,6 +112,11 @@ class SOIWorker:
         # Legacy cursor kept for migration/debug; pending uses per-entry soi_status.
         self.cursor_path = self.state_dir / "cursor.json"
         self.log = logger or SOILogger(self.config.db_root, on_status=on_status)
+        self.cancel_event = threading.Event()
+        self._active_session: ChatSession | None = None
+
+    def cancelled(self) -> bool:
+        return self.cancel_event.is_set()
 
     # ---- pending queues ----------------------------------------------------
 
@@ -151,8 +178,12 @@ class SOIWorker:
         }
         errors: list[str] = []
         seen_ids: set[str] = set()
+        cancelled = False
         # Process small batches so the model can actually call tools per item.
         while True:
+            if self.cancelled():
+                cancelled = True
+                break
             batch_changelog = self.pending_changelog()[:_FILING_BATCH_SIZE]
             batch_inbox = self.pending_inbox()[:_FILING_BATCH_SIZE]
             if not batch_changelog and not batch_inbox:
@@ -165,6 +196,9 @@ class SOIWorker:
             seen_ids.update(batch_ids)
             totals["batches"] += 1
             result = self._run_filing_batch(batch_changelog, batch_inbox)
+            if result.get("cancelled"):
+                cancelled = True
+                break
             if result.get("error"):
                 errors.append(str(result["error"]))
             totals["processed_changelog"] += int(result.get("processed_changelog") or 0)
@@ -194,7 +228,7 @@ class SOIWorker:
         processed_any = totals["processed_changelog"] > 0 or totals["seen_inbox"] > 0
         self._merge_state(
             {
-                "status": "ok" if ok else "error",
+                "status": "cancelled" if cancelled else ("ok" if ok else "error"),
                 "phase": "filing",
                 "processed_changelog": totals["processed_changelog"],
                 "marked_filed": totals["marked_filed"],
@@ -213,6 +247,7 @@ class SOIWorker:
             "ok": ok,
             "ran": True,
             "phase": "filing",
+            "cancelled": cancelled,
             "processed_changelog": totals["processed_changelog"],
             "marked_filed": totals["marked_filed"],
             "marked_discarded": totals["marked_discarded"],
@@ -234,6 +269,7 @@ class SOIWorker:
             marked_discarded=totals["marked_discarded"],
             left_pending=totals["left_pending"],
             seen_inbox=totals["seen_inbox"],
+            cancelled=cancelled or None,
             errors=errors or None,
         )
         return out
@@ -278,6 +314,13 @@ class SOIWorker:
 
         reply, err, stats = self._ask_soi(payload)
         retries = 0
+        if err == "cancelled" or stats.get("cancelled"):
+            return {
+                "ok": True,
+                "cancelled": True,
+                "processed_changelog": len(batch_changelog),
+                "mutating_calls": stats.get("mutating_calls") or [],
+            }
         if err:
             return {"ok": False, "error": err, "processed_changelog": len(batch_changelog)}
 
@@ -299,7 +342,7 @@ class SOIWorker:
         claimed_filed = self._parse_id_list(reply, entry_ids, keys=("filed", "filed_ids"))
         known = set(entry_ids)
         handled_by_id: set[str] = set()
-        dest_by_id: dict[str, str] = {}
+        dest_by_id: dict[str, Any] = {}
         by_entry = {str(e.get("id") or ""): e for e in batch_changelog}
         discarded_ids = {
             eid
@@ -322,11 +365,10 @@ class SOIWorker:
                 if item not in known:
                     continue
                 if dest in {"discard", "ephemeral", "drop"}:
-                    src = by_entry.get(item)
-                    if src and _is_ephemeral_entry(src):
-                        handled_by_id.add(item)
-                        discarded_ids.add(item)
-                        dest_by_id[item] = ""
+                    # Honor successful discard tool calls — model chose discard.
+                    handled_by_id.add(item)
+                    discarded_ids.add(item)
+                    dest_by_id[item] = ""
                     continue
                 dest_path = str(
                     result.get("folder")
@@ -340,7 +382,7 @@ class SOIWorker:
                     continue
                 handled_by_id.add(item)
                 claimed_filed.add(item)
-                dest_by_id[item] = dest_path
+                _add_dest(dest_by_id, item, dest_path)
 
         domain_plans: set[str] = set()
         for call in stats.get("mutating_calls") or []:
@@ -362,7 +404,7 @@ class SOIWorker:
                 ):
                     continue
                 handled_by_id.add(eid)
-                dest_by_id[eid] = path
+                _add_dest(dest_by_id, eid, path)
                 domain = path.split("/", 1)[0]
                 domain_plans.add(f"{domain}/Plan.json")
         for entry in batch_changelog:
@@ -391,17 +433,20 @@ class SOIWorker:
                     data["plans"] = plans
                     data["last_updated"] = _utc_now()
                     self.db.write_json(plan, data, summary=f"File oac_turn {eid} into {plan}")
-                dest_by_id[eid] = plan
+                _add_dest(dest_by_id, eid, plan)
 
         # Host safety nets only for ids SOI did not already place by id.
         leftover = [
             e for e in batch_changelog if str(e.get("id") or "") not in handled_by_id
         ]
         host_general = self._host_file_general_turns(leftover)
-        dest_by_id.update(host_general.get("dest_by_id") or {})
+        for eid, path in (host_general.get("dest_by_id") or {}).items():
+            _add_dest(dest_by_id, str(eid), str(path or ""))
         host_personal = self._host_file_personal_turns(leftover)
-        dest_by_id.update(host_personal.get("dest_by_id") or {})
+        for eid, path in (host_personal.get("dest_by_id") or {}).items():
+            _add_dest(dest_by_id, str(eid), str(path or ""))
         host_inbox = self._host_file_inbox(batch_inbox)
+        self._host_complement_multi_dest(batch_changelog, dest_by_id, discarded_ids)
 
         # Host-auto discard ephemeral if model forgot.
         for entry in batch_changelog:
@@ -746,6 +791,8 @@ class SOIWorker:
             auto_mode=False,
             persist_conversation=False,
         )
+        session.cancel_event = self.cancel_event
+        self._active_session = session
         stats: dict[str, Any] = {"mutating_calls": [], "tool_names": [], "tool_rounds": 0}
 
         def on_tool(phase: str, name: str, detail: dict[str, Any]) -> None:
@@ -822,9 +869,18 @@ class SOIWorker:
                 tool_rounds=stats["tool_rounds"],
             )
             return reply, None, stats
+        except OllamaCancelled:
+            stats["mutating_calls"] = list(getattr(session, "last_mutating_calls", []) or [])
+            stats["tool_names"] = list(getattr(session, "last_tool_names", []) or [])
+            stats["tool_rounds"] = int(getattr(session, "last_tool_rounds", 0) or 0)
+            stats["cancelled"] = True
+            self.log.log("model_error", level="info", phase=phase, error="cancelled")
+            return None, "cancelled", stats
         except OllamaError as exc:
             self.log.log("model_error", level="error", phase=phase, error=str(exc))
             return None, str(exc), stats
+        finally:
+            self._active_session = None
 
     def _execute_narrated_tool_plan(self, reply: str) -> list[dict[str, Any]]:
         """Disabled: models echo changelog rows as fake upsert JSON and loop."""
@@ -915,6 +971,79 @@ class SOIWorker:
         self.db.write_json(path, data, summary=summary)
         return True
 
+    def _host_complement_multi_dest(
+        self,
+        batch_changelog: list[dict[str, Any]],
+        dest_by_id: dict[str, Any],
+        discarded_ids: set[str],
+    ) -> None:
+        """Add secondary homes when one turn clearly belongs in more than one place."""
+        for entry in batch_changelog:
+            eid = str(entry.get("id") or "")
+            if not eid or eid in discarded_ids or _is_ephemeral_entry(entry):
+                continue
+            text = _entry_user_text(entry)
+            if not text:
+                continue
+            low = text.lower()
+            cur = dest_by_id.get(eid)
+            if isinstance(cur, list):
+                paths = [str(p).replace("\\", "/") for p in cur if p]
+            elif cur:
+                paths = [str(cur).replace("\\", "/")]
+            else:
+                paths = []
+            joined = " ".join(paths).lower()
+
+            taste = bool(
+                re.search(r"\b(i (really )?(like|love|prefer)|favorite|favourite)\b", low)
+                and re.search(
+                    r"\b(diet coke|coke|soda|coffee|matcha|espresso|latte|tea|ramen|"
+                    r"food|drink|beer|wine|snack|chip|candy)\b",
+                    low,
+                )
+            )
+            grocery = bool(
+                re.search(
+                    r"\b(diet coke|coke|soda|oat milk|dish soap|pantry|restock|"
+                    r"buy|stock|grocery|groceries)\b",
+                    low,
+                )
+            )
+
+            # Taste/like language always belongs in Preferences, even if also in Pantry.
+            if taste and "preferences" not in joined:
+                pref = "Hayden/Preferences/Food.json"
+                if self._host_append_note(
+                    pref,
+                    field="likes",
+                    note=text,
+                    summary="Complement food preference from oac_turn",
+                ):
+                    _add_dest(dest_by_id, eid, pref)
+                    joined += " " + pref.lower()
+
+            # Grocery/stock language belongs in Pantry, even if already a preference.
+            if grocery and "pantry" not in joined and (
+                taste or "preferences" in joined or re.search(r"\b(restock|buy|stock|grocery)\b", low)
+            ):
+                pantry = "Household/Pantry/Staples.json"
+                if not self.db.paths.resolve(pantry).exists():
+                    self.db.create_json(
+                        pantry,
+                        {"staples": [], "low": [], "last_updated": _utc_now()},
+                        summary="Host-create pantry staples",
+                    )
+                data = self.db.read_json(pantry)["data"]
+                if isinstance(data, dict):
+                    staples = data.get("staples") if isinstance(data.get("staples"), list) else []
+                    if text not in staples:
+                        staples.append(text)
+                    data["staples"] = staples
+                    data["last_updated"] = _utc_now()
+                    self.db.write_json(pantry, data, summary="Complement pantry item from oac_turn")
+                    _add_dest(dest_by_id, eid, pantry)
+
     def _host_file_general_turns(self, batch_changelog: list[dict[str, Any]]) -> dict[str, Any]:
         """Deterministic leaf filing when SOI skips lasting turns."""
         filed_ids: list[str] = []
@@ -941,7 +1070,10 @@ class SOIWorker:
                     note=text,
                     summary="Host-file place/lifestyle pref from oac_turn",
                 )
-            elif re.search(r"\b(matcha|espresso|latte|drip coffee|food|ramen|eat)\b", low):
+            elif re.search(
+                r"\b(matcha|espresso|latte|drip coffee|diet coke|coke|soda|food|ramen|eat)\b",
+                low,
+            ):
                 dest_path = "Hayden/Preferences/Food.json"
                 filed = self._host_append_note(
                     dest_path,

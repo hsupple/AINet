@@ -21,6 +21,7 @@ Routing guide:
 - Principles, priorities → Values
 - Health, body, soreness → Body
 
+A turn may need multiple dests — call file_note once per folder (e.g. diet coke → Preferences + Pantry).
 Discard only hi/thanks/gg.
 After tools, JSON only: {{"filed":["<id>"],"discarded":[]}}
 """.strip()
