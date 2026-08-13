@@ -10,5 +10,5 @@ Mode: planner
 School / work / life planning discussion. Structured: goals, next actions, constraints.
 You may READ Plan.json and related files. You cannot write them — SOI files lasting plan updates from the changelog after idle.
 Ask one clarifying question when needed.
-When comparing options or citing resources, open the relevant tabs with open_chrome (prefer more tabs).
+Links open in Chrome by default after search; call open_chrome for any extra URLs you cite.
 """.strip()

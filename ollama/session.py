@@ -267,8 +267,7 @@ class ChatSession:
                             "error": None,
                             "hint": (
                                 "You already ran this tool with the same arguments in this turn. "
-                                "Use the earlier tool result and answer the user now "
-                                "(open useful links with open_chrome if helpful)."
+                                "Use the earlier tool result and answer the user now."
                             ),
                         }
                         if on_tool:
@@ -290,6 +289,19 @@ class ChatSession:
                         on_tool("start", name, {"arguments": args})
                     result = self._run_tool_call(call)
                     self.last_tool_names.append(name)
+                    if (
+                        name == "web_search"
+                        and self.mode.role == "oac"
+                        and isinstance(result, dict)
+                        and result.get("ok")
+                        and not result.get("duplicate")
+                        and not self._user_opts_out_of_open(user_text)
+                    ):
+                        result = self._auto_open_from_search(
+                            result,
+                            on_tool=on_tool,
+                            seen_tool_keys=seen_tool_keys,
+                        )
                     if name in _MUTATING or name in extra_mutating:
                         self.last_mutating_calls.append(
                             {
@@ -412,10 +424,18 @@ class ChatSession:
                 base += " (cached)"
             if result.get("duplicate"):
                 return "already searched — use prior result"
+            opened = result.get("auto_opened")
+            if isinstance(opened, list) and opened:
+                base += f" · opened {len(opened)}"
             return base
         if name == "web_fetch":
             text = result.get("text") or ""
             return f"{len(text)} chars"
+        if name == "open_chrome":
+            url = str(result.get("url") or "")
+            if url:
+                return url if len(url) <= 80 else url[:77] + "…"
+            return "ok"
         if name in {"read_json", "read_text"}:
             path = result.get("path") or ""
             return path or "ok"
@@ -424,6 +444,117 @@ class ChatSession:
             if isinstance(kids, list):
                 return f"{len(kids)} entries"
         return "ok"
+
+    @staticmethod
+    def _user_opts_out_of_open(user_text: str) -> bool:
+        t = (user_text or "").lower()
+        phrases = (
+            "don't open",
+            "do not open",
+            "dont open",
+            "no browser",
+            "don't browse",
+            "do not browse",
+            "dont browse",
+            "just list",
+            "links only",
+            "no tabs",
+            "without opening",
+            "don't open chrome",
+            "do not open chrome",
+        )
+        return any(p in t for p in phrases)
+
+    @staticmethod
+    def _pick_search_urls_to_open(query: str, results: list[Any], *, limit: int = 1) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            if not url.startswith(("http://", "https://")):
+                continue
+            title = str(item.get("title") or "").strip()
+            rows.append({"title": title, "url": url})
+        if not rows:
+            return []
+
+        q = (query or "").lower()
+        want_video = any(
+            w in q for w in ("youtube", "youtu.be", "video", "watch", "tutorial", "how to")
+        )
+        if want_video:
+            yt = [
+                r
+                for r in rows
+                if "youtube.com" in r["url"].lower() or "youtu.be" in r["url"].lower()
+            ]
+            if yt:
+                return yt[:limit]
+        return rows[:limit]
+
+    def _auto_open_from_search(
+        self,
+        search_result: dict[str, Any],
+        *,
+        on_tool: ToolCallback | None,
+        seen_tool_keys: set[str],
+    ) -> dict[str, Any]:
+        results = search_result.get("results")
+        if not isinstance(results, list) or not results:
+            return search_result
+
+        picks = self._pick_search_urls_to_open(
+            str(search_result.get("query") or ""),
+            results,
+            limit=1,
+        )
+        if not picks:
+            return search_result
+
+        from ainet.tools.browser import open_chrome
+
+        opened: list[dict[str, Any]] = []
+        for pick in picks:
+            url = pick["url"]
+            tool_key = self._tool_call_key("open_chrome", {"url": url, "new_tab": True})
+            if tool_key in seen_tool_keys:
+                continue
+            if on_tool:
+                on_tool("start", "open_chrome", {"arguments": {"url": url, "new_tab": True}})
+            try:
+                chrome_result = open_chrome(url, new_tab=True)
+                ok = bool(chrome_result.get("ok", True))
+                err = None
+            except Exception as exc:  # noqa: BLE001 — surface to model/UI
+                chrome_result = {"ok": False, "opened": False, "url": url, "error": str(exc)}
+                ok = False
+                err = str(exc)
+            seen_tool_keys.add(tool_key)
+            seen_tool_keys.add(self._tool_call_key("open_chrome", {"url": url}))
+            self.last_tool_names.append("open_chrome")
+            if on_tool:
+                on_tool(
+                    "done",
+                    "open_chrome",
+                    {
+                        "ok": ok,
+                        "summary": err or self._tool_result_summary("open_chrome", chrome_result),
+                    },
+                )
+            if ok:
+                opened.append({"title": pick.get("title") or "", "url": url})
+
+        if not opened:
+            return search_result
+
+        out = dict(search_result)
+        out["auto_opened"] = opened
+        out["hint"] = (
+            "Host already opened the URL(s) in auto_opened in Chrome. "
+            "Tell Hayden what opened. Do not claim other tabs opened unless you call open_chrome."
+        )
+        return out
 
     def _maybe_autoroute(self, user_text: str) -> str | None:
         if not self.auto_mode or self.mode_locked or self.mode.role != "oac":

@@ -9,5 +9,5 @@ PROMPT = f"""
 Mode: companion (spoken / mic)
 Short replies (a few sentences). Warm and direct.
 Use read tools only if the answer needs memory/preferences/people/facts.
-When links or sources help, open them in Chrome generously (open_chrome) instead of only naming them.
+Links open in Chrome by default after search; call open_chrome for any extra URLs you cite.
 """.strip()

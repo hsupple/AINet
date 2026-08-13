@@ -354,7 +354,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "web_search",
             "description": (
                 "Search the public internet via Brave Search. Returns concise title/url/snippet "
-                "results. Use for external facts; do not invent. Cite titles/urls briefly."
+                "results. The host auto-opens the best result in Chrome unless the user opted out. "
+                "Use for external facts; do not invent. Cite titles/urls briefly."
             ),
             "parameters": {
                 "type": "object",
@@ -404,9 +405,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "open_chrome",
             "description": (
                 "Open an http(s) URL as a new tab in Google Chrome on this PC. "
-                "Be generous: open useful pages often (search results, sources, products, docs, "
-                "maps, videos, references) — prefer more tabs over fewer. Call once per URL. "
-                "Also use when the user asks to open, show, or pull up a page/link."
+                "web_search already auto-opens the top hit — use this for extra URLs you cite, "
+                "or when the user asks to open/show a page. Call once per URL. "
+                "Never claim a tab opened unless this tool ran (or search auto_opened it)."
             ),
             "parameters": {
                 "type": "object",
