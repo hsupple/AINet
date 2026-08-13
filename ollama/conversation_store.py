@@ -42,6 +42,7 @@ class ConversationStore:
             "topic": topic,
             "created_at": _utc_now(),
             "updated_at": _utc_now(),
+            "memory": "",
             "turns": [],
         }
         self._write_session(session_id, data)
@@ -81,6 +82,7 @@ class ConversationStore:
         assistant_text: str,
         mode_id: str,
         topic: str | None = None,
+        memory: str | None = None,
     ) -> dict[str, Any]:
         # Heal after db reset / deleted runtime while the chat process is still up.
         if not self.session_exists(session_id):
@@ -97,6 +99,8 @@ class ConversationStore:
         data.setdefault("turns", []).append(turn)
         data["updated_at"] = turn["ts"]
         data["mode_id"] = mode_id
+        if memory is not None:
+            data["memory"] = str(memory)
         if topic is not None:
             data["topic"] = topic
         self._write_session(session_id, data)
@@ -131,6 +135,13 @@ class ConversationStore:
         if not isinstance(turns, list):
             return []
         return turns[-limit:]
+
+    def load_memory(self, session_id: str) -> str:
+        try:
+            data = self.load_session(session_id)
+        except (OSError, json.JSONDecodeError, FileNotFoundError):
+            return ""
+        return str(data.get("memory") or "").strip()
 
     def turns_as_messages(self, session_id: str, *, limit: int = 8) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []

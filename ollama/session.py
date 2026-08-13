@@ -20,7 +20,16 @@ from ollama.client import OllamaCancelled, OllamaClient, ThinkingCallback, Token
 from ollama.content_filing import cop_name_in_text
 from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
+from ollama.convo_memory import (
+    VisibleTokenFilter,
+    extract_http_urls,
+    host_fallback_memory,
+    last_turn_block,
+    memory_system_suffix,
+    split_reply,
+)
 from ollama.conversation_store import ConversationStore
+from ollama.prompts.shared import today_context
 from ollama.inference_gate import INFERENCE_GATE
 from ollama.modes import get_mode
 from ollama.modes.base import READ_TOOLS, Mode
@@ -78,6 +87,10 @@ class ChatSession:
         self.full_tools_unlocked = False
         self.project_root: str | None = None
         self._project_prev_mode: str = "companion"
+        self.convo_memory: str = ""
+        self.last_user_text: str = ""
+        self.last_assistant_text: str = ""
+        self.last_links: list[tuple[str, str]] = []
         self.messages: list[dict[str, Any]] = []
         self.last_activity = time.monotonic()
         self.persist_conversation = (
@@ -92,11 +105,14 @@ class ChatSession:
             self.session_id = self.store.ensure_session(mode_id=mode.id)
         self._rebuild_system()
         if resume_session and self.store and self.session_id:
-            prior = self.store.turns_as_messages(
-                self.session_id,
-                limit=max(2, self.config.max_history_messages // 2),
-            )
-            self.messages.extend(prior)
+            self.convo_memory = self.store.load_memory(self.session_id)
+            recent = self.store.recent_turns(self.session_id, limit=1)
+            if recent:
+                last = recent[-1]
+                self.last_user_text = str(last.get("user") or "")
+                self.last_assistant_text = str(last.get("assistant") or "")
+                self.last_links = [("", u) for u in extract_http_urls(self.last_assistant_text)]
+            self._rebuild_system()
         self.cancel_event = threading.Event()
 
     def request_cancel(self) -> None:
@@ -138,11 +154,17 @@ class ChatSession:
 
     def _rebuild_system(self) -> None:
         prompt = self.mode.prompt
+        if self.mode.role == "oac":
+            prompt = f"{today_context()}\n\n{prompt}"
         if self.project_root:
             prompt = (
                 f"{prompt}\n\nFocused project: {self.project_root}\n"
                 "All paths are relative to this folder unless already under it."
             )
+        if self.mode.role == "oac":
+            prompt = f"{prompt}{memory_system_suffix(self.convo_memory)}"
+            if self.last_user_text or self.last_assistant_text or self.last_links:
+                prompt = f"{prompt}{last_turn_block(self.last_user_text, self.last_assistant_text, self.last_links)}"
         system: list[dict[str, Any]] = [{"role": "system", "content": prompt}]
         dialogue = [m for m in self.messages if m.get("role") != "system"]
         self.messages = system + dialogue
@@ -152,6 +174,10 @@ class ChatSession:
         self.full_tools_unlocked = False
         self.project_root = None
         self._project_prev_mode = "companion"
+        self.convo_memory = ""
+        self.last_user_text = ""
+        self.last_assistant_text = ""
+        self.last_links = []
         if self.store and self.mode.role == "oac":
             self.session_id = self.store.new_session(mode_id=self.mode.id)
         self._rebuild_system()
@@ -224,6 +250,13 @@ class ChatSession:
         self.messages.append({"role": "user", "content": user_text})
         self._trim_history()
 
+        if self.mode.role == "oac":
+            opened = self._maybe_host_open_links(
+                user_text, on_token=on_token, on_tool=on_tool
+            )
+            if opened is not None:
+                return opened
+
         tools = self._active_tools()
         final_text = ""
         streamed_any = False
@@ -236,13 +269,19 @@ class ChatSession:
         req_timeout = (
             self.config.soi_timeout_s if self.mode.role == "soi" else self.config.timeout_s
         )
+        hide_mem = self.mode.role == "oac"
+        vis_filter = VisibleTokenFilter(on_token) if hide_mem and on_token else None
+        turn_links: list[tuple[str, str]] = []
 
         def _token(delta: str) -> None:
             nonlocal streamed_any
+            if not delta:
+                return
             streamed_any = True
-            if delta:
-                streamed_parts.append(delta)
-            if on_token:
+            streamed_parts.append(delta)
+            if vis_filter is not None:
+                vis_filter.feed(delta)
+            elif on_token:
                 on_token(delta)
 
         extra_mutating = {
@@ -299,6 +338,8 @@ class ChatSession:
 
                 self.last_tool_rounds += 1
                 if streamed_any and on_token:
+                    if vis_filter is not None:
+                        vis_filter.flush()
                     on_token("\n")
                     streamed_any = False
                 elif streamed_any and on_thinking and not on_token:
@@ -389,13 +430,22 @@ class ChatSession:
                             "content": json.dumps(payload, ensure_ascii=False),
                         }
                     )
+                    if hide_mem and isinstance(result, dict):
+                        turn_links.extend(self._links_from_tool(name, result))
                 if parsed_from_text:
                     break
                 self._trim_history()
             else:
                 final_text = "I hit the tool-call limit for this turn. Try again with a narrower ask."
         except OllamaCancelled:
+            if vis_filter is not None:
+                vis_filter.flush()
             partial = "".join(streamed_parts).strip()
+            if hide_mem:
+                partial, mem = split_reply(partial)
+                if mem:
+                    self.convo_memory = mem
+                    self._rebuild_system()
             if partial:
                 final_text = partial
                 if not (self.messages and self.messages[-1].get("role") == "assistant"):
@@ -421,6 +471,23 @@ class ChatSession:
                 else:
                     self.messages.append({"role": "assistant", "content": final_text})
 
+        if vis_filter is not None:
+            vis_filter.flush()
+        if hide_mem:
+            visible, mem = split_reply(final_text or "")
+            final_text = visible
+            if mem:
+                self.convo_memory = mem
+            else:
+                self.convo_memory = host_fallback_memory(
+                    user_text, final_text, self.convo_memory
+                )
+            self._strip_memory_from_stored_replies()
+            self.last_user_text = user_text
+            self.last_assistant_text = final_text
+            self.last_links = turn_links[:8]
+            self._rebuild_system()
+
         if self.store and self.mode.role == "oac":
             if not self.session_id or not self.store.session_exists(self.session_id):
                 self.session_id = self.store.ensure_session(mode_id=self.mode.id)
@@ -429,6 +496,7 @@ class ChatSession:
                 user_text=user_text,
                 assistant_text=final_text,
                 mode_id=self.mode.id,
+                memory=self.convo_memory,
             )
             # append_turn may have minted a new session after a db wipe
             current = self.store.current_session_id()
@@ -515,6 +583,88 @@ class ChatSession:
             if isinstance(kids, list):
                 return f"{len(kids)} entries"
         return "ok"
+
+    def _wants_open_prior_links(self, user_text: str) -> bool:
+        t = (user_text or "").lower()
+        if self._user_opts_out_of_open(user_text):
+            return False
+        if "open" not in t and "pull up" not in t:
+            return False
+        return any(
+            w in t
+            for w in ("link", "tab", "page", "url", "those", "them", "these")
+        )
+
+    def _prior_urls(self) -> list[tuple[str, str]]:
+        rows: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for title, url in self.last_links:
+            href = (url or "").strip()
+            if href.startswith("http") and href not in seen:
+                seen.add(href)
+                rows.append((title, href))
+        if not rows and self.last_assistant_text:
+            for href in extract_http_urls(self.last_assistant_text):
+                rows.append(("", href))
+        return rows[:8]
+
+    def _maybe_host_open_links(
+        self,
+        user_text: str,
+        *,
+        on_token: TokenCallback | None,
+        on_tool: ToolCallback | None,
+    ) -> str | None:
+        """Open last-turn URLs immediately — do not wait on the model (it hangs)."""
+        if not self._wants_open_prior_links(user_text):
+            return None
+        rows = self._prior_urls()
+        if not rows:
+            return None
+        from ainet.tools.browser import open_chrome
+
+        urls = [url for _title, url in rows]
+        if on_tool:
+            on_tool("start", "open_chrome", {"arguments": {"urls": urls}})
+        try:
+            result = open_chrome(urls=urls, new_tab=True)
+            ok = bool(result.get("ok", True))
+            err = result.get("error")
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": str(exc)}
+            ok = False
+            err = str(exc)
+        n = len(result.get("opened") or urls) if ok else 0
+        summary = err or (f"{n} tabs" if n != 1 else urls[0])
+        if on_tool:
+            on_tool("done", "open_chrome", {"ok": ok, "summary": summary})
+        if ok:
+            reply = "Opened in Chrome." if n == 1 else f"Opened {n} tabs in Chrome."
+        else:
+            reply = f"Couldn't open Chrome: {err}"
+        if on_token:
+            on_token(reply)
+        self.messages.append({"role": "assistant", "content": reply})
+        self.last_tool_names = ["open_chrome"]
+        self.last_user_text = user_text
+        self.last_assistant_text = reply
+        self.convo_memory = host_fallback_memory(user_text, reply, self.convo_memory)
+        self._rebuild_system()
+        if self.store and self.mode.role == "oac":
+            if not self.session_id or not self.store.session_exists(self.session_id):
+                self.session_id = self.store.ensure_session(mode_id=self.mode.id)
+            self.store.append_turn(
+                self.session_id,
+                user_text=user_text,
+                assistant_text=reply,
+                mode_id=self.mode.id,
+                memory=self.convo_memory,
+            )
+            current = self.store.current_session_id()
+            if current:
+                self.session_id = current
+        self.touch()
+        return reply
 
     @staticmethod
     def _user_opts_out_of_open(user_text: str) -> bool:
@@ -646,6 +796,12 @@ class ChatSession:
         rest = [self._compact_message(m) for m in self.messages if m.get("role") != "system"]
         rest = self._drop_orphan_tools(rest)
 
+        # OAC: memory + previous turn (prose) + current turn. Drop old tool dumps.
+        if self.mode.role == "oac":
+            rest = self._keep_oac_recent(rest)
+            self.messages = system + rest
+            return
+
         msg_limit = max(4, self.config.max_history_messages)
         char_limit = max(2000, int(getattr(self.config, "max_history_chars", 12000) or 12000))
         if self.mode.id == "deep_research":
@@ -674,6 +830,87 @@ class ChatSession:
         rest = self._drop_orphan_tools(head + tail)
         self.messages = system + rest
 
+    def _keep_oac_recent(self, rest: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Previous user+reply (text only) + current user turn (including in-flight tools)."""
+        user_idxs = [i for i, m in enumerate(rest) if m.get("role") == "user"]
+        if not user_idxs:
+            return rest
+        current = user_idxs[-1]
+        current_turn = rest[current:]
+        if len(user_idxs) < 2:
+            return self._drop_orphan_tools(current_turn)
+        prev = user_idxs[-2]
+        prior = self._prose_only_turn(rest[prev:current])
+        return self._drop_orphan_tools(prior + current_turn)
+
+    @staticmethod
+    def _prose_only_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep last user + last answer in full; drop tool_calls. Preserve URLs from tools."""
+        out: list[dict[str, Any]] = []
+        last_assistant: dict[str, Any] | None = None
+        link_lines: list[str] = []
+        seen: set[str] = set()
+        for message in messages:
+            role = message.get("role")
+            if role == "user":
+                text = str(message.get("content") or "").strip()
+                out.append({"role": "user", "content": text[:2000]})
+            elif role == "assistant":
+                text = str(message.get("content") or "").strip()
+                if text:
+                    last_assistant = {"role": "assistant", "content": text[:4000]}
+            elif role == "tool":
+                raw = message.get("content")
+                try:
+                    data = json.loads(raw) if isinstance(raw, str) else raw
+                except (json.JSONDecodeError, TypeError):
+                    data = None
+                if isinstance(data, dict):
+                    for title, url in ChatSession._links_from_tool("", data):
+                        if url in seen:
+                            continue
+                        seen.add(url)
+                        label = title or url
+                        link_lines.append(f"- {label}: {url}")
+        if last_assistant:
+            body = last_assistant["content"]
+            if link_lines and "http" not in body:
+                body = body.rstrip() + "\n\nLinks:\n" + "\n".join(link_lines[:8])
+            last_assistant["content"] = body[:4000]
+            out.append(last_assistant)
+        return out
+
+    @staticmethod
+    def _links_from_tool(name: str, result: dict[str, Any]) -> list[tuple[str, str]]:
+        rows: list[tuple[str, str]] = []
+        results = result.get("results")
+        if isinstance(results, list):
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if url.startswith("http"):
+                    rows.append((str(item.get("title") or ""), url))
+        opened = result.get("auto_opened") or result.get("opened")
+        if isinstance(opened, list):
+            for item in opened:
+                if isinstance(item, dict):
+                    url = str(item.get("url") or "").strip()
+                    if url.startswith("http"):
+                        rows.append((str(item.get("title") or ""), url))
+                elif isinstance(item, str) and item.startswith("http"):
+                    rows.append(("", item))
+        urls = result.get("urls")
+        if isinstance(urls, list):
+            for item in urls:
+                if isinstance(item, str) and item.startswith("http"):
+                    rows.append(("", item))
+        url = str(result.get("url") or "").strip()
+        if url.startswith("http"):
+            rows.append((str(result.get("title") or ""), url))
+        _ = name
+        return rows
+
     @staticmethod
     def _dialogue_chars(messages: list[dict[str, Any]]) -> int:
         total = 0
@@ -697,6 +934,16 @@ class ChatSession:
         # Thinking blobs are unused for follow-up turns and burn context.
         out.pop("thinking", None)
         return out
+
+    def _strip_memory_from_stored_replies(self) -> None:
+        for message in self.messages:
+            if message.get("role") != "assistant":
+                continue
+            content = message.get("content")
+            if not isinstance(content, str) or not content:
+                continue
+            visible, _mem = split_reply(content)
+            message["content"] = visible
 
     @staticmethod
     def _has_tool_calls(message: dict[str, Any]) -> bool:

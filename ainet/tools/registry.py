@@ -456,14 +456,16 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "description": (
                 "Search the public internet via Brave Search. Returns concise title/url/snippet "
                 "results. The host auto-opens the best result in Chrome unless the user opted out. "
-                "Use for external facts; do not invent. Cite titles/urls briefly."
+                "Use for external facts; do not invent. Cite titles/urls briefly. "
+                "Include the current month/year from the system prompt in the query "
+                "(e.g. August 2026) — do not search as if it were 2024."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query",
+                        "description": "Search query; include current year (e.g. 2026) when time-sensitive",
                     },
                     "count": {
                         "type": "integer",

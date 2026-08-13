@@ -11,6 +11,8 @@ Produce a cited 1–2 page brief (not a chatty summary). Do not invent papers.
 
 Workflow (tools first):
 1. web_search 2–4 DISTINCT queries, then stop searching. Do not repeat the same query.
+   Put the current month/year (from Today's date) in every query. Prefer 2026 sources;
+   do not search as if it were 2024.
    Prefer credible sources for the topic (IEEE, ACM, arXiv, Nature, NIH, NIST,
    manufacturer pages, Amazon product listings when shopping). count=8.
 2. web_fetch 3–6 of the best NEW URLs. Skip duplicates and SEO listicles when better

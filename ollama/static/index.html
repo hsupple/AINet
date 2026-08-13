@@ -1672,8 +1672,10 @@
           scheduleLiveMarkdown(body, () => full);
         } else if (ev.type === "done") {
           donePayload = ev;
-          if (!full) {
-            full = asText(ev.reply) || (ev.cancelled ? "(stopped)" : "(empty reply)");
+          const finalReply = asText(ev.reply);
+          if (finalReply) full = finalReply;
+          else if (!full) {
+            full = ev.cancelled ? "(stopped)" : "(empty reply)";
           }
           if (ev.cancelled && full && !/\(stopped\)\s*$/.test(full)) {
             full = full.replace(/\s*$/, "") + "\n\n(stopped)";
