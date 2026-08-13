@@ -14,6 +14,8 @@ if (-not $env:OLLAMA_MODELS -and (Test-Path "D:\AINet-Tools\ollama-models")) {
 if (-not $env:AINET_OLLAMA_MODEL) {
   $env:AINET_OLLAMA_MODEL = "qwen3:8b"
 }
+# Always pin AINet chat to qwen3:8b (never inherit a stale llama env).
+$env:AINET_OLLAMA_MODEL = "qwen3:8b"
 
 $py = Get-Command python -ErrorAction SilentlyContinue
 if (-not $py) {

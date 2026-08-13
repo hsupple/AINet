@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AINet</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #ffffff;
+      --bg-soft: #f7f8f9;
+      --bg-hover: #f0f3f5;
+      --line: #e8eaed;
+      --text: #0b0e11;
+      --muted: #6f767e;
+      --green: #00c805;
+      --green-dark: #00a803;
+      --green-soft: rgba(0, 200, 5, 0.10);
+      --danger: #ff5000;
+      --radius: 12px;
+      --shadow: 0 1px 2px rgba(11, 14, 17, 0.04);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      display: grid;
+      grid-template-rows: 56px 1fr;
+      -webkit-font-smoothing: antialiased;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0 1.1rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 0.5rem; min-width: 120px; }
+    .brand-mark {
+      width: 20px; height: 20px; border-radius: 6px; background: var(--green);
+    }
+    .brand strong { font-size: 1.02rem; letter-spacing: -0.02em; }
+    .brand span { color: var(--muted); font-size: 0.78rem; margin-left: 0.15rem; }
+    .page-tabs { display: flex; gap: 0.3rem; }
+    .page-tab {
+      border: 0; background: transparent; color: var(--muted);
+      border-radius: 999px; padding: 0.5rem 0.95rem; cursor: pointer;
+      font: inherit; font-size: 0.9rem; font-weight: 500;
+    }
+    .page-tab:hover { background: var(--bg-hover); color: var(--text); }
+    .page-tab.active { background: var(--bg-soft); color: var(--text); font-weight: 600; }
+    .status-dot {
+      margin-left: auto; display: flex; align-items: center; gap: 0.55rem;
+      color: var(--muted); font-size: 0.75rem;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--danger);
+    }
+    .dot.on { background: var(--green); }
+
+    .main { min-height: 0; background: var(--bg-soft); }
+    .panel { display: none; height: 100%; min-height: 0; }
+    .panel.active { display: grid; }
+    iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+
+    .split {
+      height: 100%; min-height: 0;
+      display: grid; grid-template-columns: minmax(260px, 0.9fr) 1.2fr;
+      gap: 0.7rem; padding: 0.7rem;
+    }
+    .pane {
+      min-height: 0; overflow: auto; background: var(--bg);
+      border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+    }
+    .pane-head {
+      position: sticky; top: 0; z-index: 1;
+      padding: 0.85rem 1rem; border-bottom: 1px solid var(--line);
+      background: var(--bg); font-size: 0.8rem; font-weight: 600;
+    }
+    .tree-list { padding: 0.55rem 0.65rem 1rem; font-size: 0.86rem; }
+    .row {
+      padding: 0.42rem 0.5rem; border-radius: 8px; cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .row:hover { background: var(--bg-hover); }
+    .row.sel { background: var(--green-soft); color: var(--green-dark); font-weight: 600; }
+    .detail-body {
+      padding: 0.85rem 1rem 1.2rem; white-space: pre-wrap; word-break: break-word;
+      font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; line-height: 1.45;
+    }
+    .empty { color: var(--muted); }
+
+    .log-wrap {
+      height: 100%; min-height: 0; display: grid;
+      grid-template-rows: auto 1fr; gap: 0.7rem; padding: 0.7rem;
+    }
+    .meta-bar {
+      display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;
+    }
+    .pill {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      padding: 0.28rem 0.6rem; border-radius: 999px; font-size: 0.72rem; font-weight: 650;
+      background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+    }
+    .pill.ok { color: var(--green-dark); background: var(--green-soft); border-color: transparent; }
+    .pill.bad { color: var(--danger); background: rgba(255, 80, 0, 0.08); border-color: transparent; }
+    .log {
+      min-height: 0; overflow: auto; background: #0f1419; color: #d7e0ea;
+      border-radius: var(--radius); padding: 0.85rem 1rem;
+      font-family: ui-monospace, Consolas, monospace; font-size: 0.78rem; line-height: 1.45;
+    }
+    .log .entry { margin: 0 0 0.85rem; white-space: pre-wrap; word-break: break-word; }
+    .log .tag { color: #7dffa0; }
+    .log .muted { color: #8090a0; }
+    .log .err { color: #ff8a65; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <strong>AINet</strong>
+      <span id="brand-meta"></span>
+    </div>
+    <nav class="page-tabs" id="page-tabs"></nav>
+    <div class="status-dot">
+      <span><i class="dot" id="dot-ollama"></i> Ollama</span>
+      <span><i class="dot" id="dot-chat"></i> Chat</span>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="panel" id="panel-chat">
+      <iframe id="frame-chat" src="about:blank" title="Chat"></iframe>
+    </section>
+
+    <section class="panel" id="panel-database">
+      <div class="split">
+        <div class="pane">
+          <div class="pane-head">Database</div>
+          <div class="tree-list" id="db-tree"><span class="empty">Loading…</span></div>
+        </div>
+        <div class="pane">
+          <div class="pane-head" id="db-detail-head">Preview</div>
+          <div class="detail-body" id="db-detail"><span class="empty">Select a file.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-soi">
+      <div class="log-wrap">
+        <div class="meta-bar">
+          <span class="pill" id="soi-source">SOI</span>
+          <span class="pill" id="soi-running">idle</span>
+        </div>
+        <div class="log" id="soi-log"><div class="empty">Waiting for SOI events…</div></div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-ollama">
+      <div class="log-wrap">
+        <div class="meta-bar">
+          <span class="pill" id="ollama-model">qwen3:8b</span>
+          <span class="pill" id="ollama-online">Ollama</span>
+          <span class="pill" id="ollama-ps">ps</span>
+        </div>
+        <div class="log" id="ollama-log"><div class="empty">Raw model output will appear here…</div></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const PAGES = [
+      { id: "chat", label: "Chat" },
+      { id: "database", label: "Database" },
+      { id: "soi", label: "SOI" },
+      { id: "ollama", label: "Ollama" },
+    ];
+
+    let page = "chat";
+    let selectedPath = "";
+    let soiAfter = 0;
+    let rawAfter = 0;
+    let soiBootstrapped = false;
+    let rawBootstrapped = false;
+
+    const $ = (id) => document.getElementById(id);
+
+    async function api(path, opts) {
+      const res = await fetch(path, opts);
+      return res.json();
+    }
+
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function renderTop() {
+      $("page-tabs").innerHTML = PAGES.map((p) => `
+        <button class="page-tab${page === p.id ? " active" : ""}" data-page="${p.id}">${esc(p.label)}</button>
+      `).join("");
+      document.querySelectorAll(".page-tab").forEach((el) => {
+        el.onclick = () => setPage(el.dataset.page);
+      });
+    }
+
+    function showPanel(id) {
+      document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+      const panel = $(`panel-${id}`);
+      if (panel) panel.classList.add("active");
+    }
+
+    async function setPage(id) {
+      page = id;
+      renderTop();
+      showPanel(page);
+      await activatePage();
+    }
+
+    async function activatePage() {
+      if (page === "chat") return loadChat();
+      if (page === "database") return loadDatabase();
+      if (page === "soi") return pollSoi(true);
+      if (page === "ollama") return pollOllama(true);
+    }
+
+    function renderTreeNode(node, depth = 0) {
+      if (!node) return "";
+      const pad = 8 + depth * 14;
+      let html = `<div class="row tree-row${selectedPath === node.path ? " sel" : ""}" data-path="${esc(node.path || "")}" style="padding-left:${pad}px">${esc(node.name)}</div>`;
+      if (Array.isArray(node.children)) {
+        for (const child of node.children) html += renderTreeNode(child, depth + 1);
+      }
+      return html;
+    }
+
+    async function loadDatabase() {
+      const data = await api("/api/tree?path=.&depth=5");
+      if (!data.ok && data.error) {
+        $("db-tree").innerHTML = `<div class="empty">${esc(data.error)}</div>`;
+        return;
+      }
+      $("db-tree").innerHTML = renderTreeNode(data.tree || data);
+      document.querySelectorAll(".tree-row").forEach((el) => {
+        el.onclick = async () => {
+          selectedPath = el.dataset.path || "";
+          await loadDatabase();
+          if (!selectedPath || selectedPath.endsWith("/") || !selectedPath.includes(".")) {
+            $("db-detail-head").textContent = selectedPath || "Preview";
+            $("db-detail").innerHTML = '<span class="empty">Folder selected.</span>';
+            return;
+          }
+          const file = await api(`/api/file?path=${encodeURIComponent(selectedPath)}`);
+          $("db-detail-head").textContent = selectedPath;
+          if (!file.ok) {
+            $("db-detail").textContent = file.error || "read failed";
+            return;
+          }
+          const body = file.data ?? file.content ?? file;
+          $("db-detail").textContent = typeof body === "string" ? body : JSON.stringify(body, null, 2);
+        };
+      });
+    }
+
+    async function loadChat() {
+      const frame = $("frame-chat");
+      // Don't reload on tab switches — that wipes the visible chat transcript.
+      if (!frame.src || frame.src === "about:blank") {
+        frame.src = "http://127.0.0.1:1111/";
+      }
+    }
+
+    function formatSoi(ev) {
+      const id = ev.id ?? "";
+      const event = ev.event || "log";
+      const phase = ev.phase ? ` [${ev.phase}]` : "";
+      const text = ev.text || ev.preview || ev.reply || ev.error || "";
+      const extra = [];
+      if (ev.dest) extra.push(`dest=${ev.dest}`);
+      if (ev.folder) extra.push(`folder=${ev.folder}`);
+      if (ev.entry_ids) extra.push(`ids=${JSON.stringify(ev.entry_ids)}`);
+      if (ev.pending_changelog != null) extra.push(`pending=${ev.pending_changelog}`);
+      const meta = extra.length ? `\n  ${extra.join("  ")}` : "";
+      const body = text ? `\n${text}` : "";
+      return `<div class="entry"><span class="muted">#${esc(id)}</span> <span class="tag">${esc(event)}${esc(phase)}</span>${esc(meta)}${esc(body)}</div>`;
+    }
+
+    async function pollSoi(force) {
+      if (page !== "soi" && !force) return;
+      const data = await api(`/api/soi/events?after=${soiAfter}`);
+      const events = data.events || [];
+      const el = $("soi-log");
+      if (!soiBootstrapped) {
+        el.innerHTML = events.length ? events.map(formatSoi).join("") : '<div class="empty">Waiting for SOI events…</div>';
+        soiBootstrapped = true;
+      } else if (events.length) {
+        if (el.querySelector(".empty")) el.innerHTML = "";
+        el.insertAdjacentHTML("beforeend", events.map(formatSoi).join(""));
+        el.scrollTop = el.scrollHeight;
+      }
+      for (const ev of events) {
+        const id = Number(ev.id || 0);
+        if (id > soiAfter) soiAfter = id;
+      }
+      $("soi-source").textContent = `source: ${data.source || "?"}`;
+      const running = !!data.soi_running;
+      $("soi-running").textContent = running ? "SOI running" : "SOI idle";
+      $("soi-running").className = `pill ${running ? "ok" : ""}`;
+    }
+
+    function formatRaw(row) {
+      const src = row.source || "?";
+      const event = row.event || (row.reply ? "reply" : "out");
+      let body = "";
+      if (row.user) body += `USER:\n${row.user}\n\n`;
+      if (row.reply) body += `REPLY:\n${row.reply}`;
+      else if (row.text || row.preview) body += String(row.text || row.preview);
+      if (row.error) body += `\nERROR: ${row.error}`;
+      return `<div class="entry"><span class="muted">#${esc(row.id ?? "")}</span> <span class="tag">${esc(src)}/${esc(event)}</span>${row.model ? ` <span class="muted">${esc(row.model)}</span>` : ""}\n${esc(body)}</div>`;
+    }
+
+    async function pollOllama(force) {
+      if (page !== "ollama" && !force) return;
+      const data = await api(`/api/ollama/raw?after=${rawAfter}`);
+      $("ollama-model").textContent = data.model || data.chat_model || "qwen3:8b";
+      const tagsOk = !(data.tags && data.tags.error);
+      $("ollama-online").textContent = tagsOk ? "Ollama online" : "Ollama offline";
+      $("ollama-online").className = `pill ${tagsOk ? "ok" : "bad"}`;
+
+      let psText = "ps: —";
+      const models = data.ps && data.ps.models;
+      if (Array.isArray(models) && models.length) {
+        psText = "loaded: " + models.map((m) => m.name || m.model).filter(Boolean).join(", ");
+      } else if (data.ps && data.ps.error) {
+        psText = "ps: offline";
+      }
+      $("ollama-ps").textContent = psText;
+
+      const lines = data.lines || [];
+      const el = $("ollama-log");
+      if (!rawBootstrapped) {
+        el.innerHTML = lines.length ? lines.map(formatRaw).join("") : '<div class="empty">Raw model output will appear here…</div>';
+        rawBootstrapped = true;
+      } else if (lines.length) {
+        if (el.querySelector(".empty")) el.innerHTML = "";
+        el.insertAdjacentHTML("beforeend", lines.map(formatRaw).join(""));
+        el.scrollTop = el.scrollHeight;
+      }
+      for (const row of lines) {
+        const id = Number(row.id || 0);
+        if (id > rawAfter) rawAfter = id;
+      }
+    }
+
+    async function refreshStatus() {
+      try {
+        const st = await api("/api/status");
+        $("brand-meta").textContent = st.chat_model || st.model || "";
+        $("dot-ollama").classList.toggle("on", !!st.services?.ollama?.ok);
+        $("dot-chat").classList.toggle("on", !!st.services?.chat?.ok);
+      } catch (_) {}
+    }
+
+    async function boot() {
+      try {
+        await api("/api/boot", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      } catch (_) {}
+    }
+
+    (async function init() {
+      renderTop();
+      showPanel(page);
+      boot();
+      await refreshStatus();
+      await activatePage();
+      setInterval(refreshStatus, 4000);
+      setInterval(() => pollSoi(false), 1500);
+      setInterval(() => pollOllama(false), 1500);
+    })();
+  </script>
+</body>
+</html>

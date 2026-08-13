@@ -863,7 +863,7 @@
       return r.json();
     }
 
-    async function streamChat(message, voice, botEl) {
+    async function streamChat(message, voice, botEl, onDone) {
       const r = await fetch("/api/chat-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -901,8 +901,10 @@
             el.classList.remove("sys");
             el.textContent = asText(ev.reply);
           }
+          if (typeof onDone === "function") onDone();
         } else if (ev.type === "error") {
           err = asText(ev.error || "Error");
+          if (typeof onDone === "function") onDone();
         }
       };
 
@@ -936,8 +938,14 @@
       addBubble(text, "user");
       input.value = "";
       const botEl = addBubble("…", "bot sys");
+      const unlockSend = () => {
+        if (!busy) return;
+        busy = false;
+        sendBtn.disabled = false;
+        input.focus();
+      };
       try {
-        const data = await streamChat(text, voiceOn, botEl);
+        const data = await streamChat(text, voiceOn, botEl, unlockSend);
         if (data && data.ok === false) {
           botEl.classList.add("error");
           botEl.textContent = data.error || "Error";
@@ -947,9 +955,7 @@
         botEl.classList.remove("sys");
         botEl.textContent = String(err);
       } finally {
-        busy = false;
-        sendBtn.disabled = false;
-        input.focus();
+        unlockSend();
         refreshStatus();
       }
     });

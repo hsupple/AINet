@@ -33,6 +33,8 @@ class ChatApp:
         self.lock = threading.RLock()
         self._soi_seq = 0
         self.soi_log: deque[dict[str, Any]] = deque(maxlen=500)
+        self._raw_seq = 0
+        self.raw_log: deque[dict[str, Any]] = deque(maxlen=300)
         self.session = ChatSession(
             mode=get_mode(mode_id),
             config=config,
@@ -45,6 +47,19 @@ class ChatApp:
         )
         if config.soi_enabled:
             self.watcher.start()
+
+    def _append_raw(self, *, source: str, **fields: Any) -> None:
+        row = {k: v for k, v in fields.items() if v is not None}
+        row["source"] = source
+        row["ts"] = row.get("ts") or time.strftime("%Y-%m-%dT%H:%M:%S")
+        with self.lock:
+            self._raw_seq += 1
+            row["id"] = self._raw_seq
+            self.raw_log.append(row)
+
+    def raw_lines_after(self, after_id: int = 0) -> list[dict[str, Any]]:
+        with self.lock:
+            return [row for row in self.raw_log if int(row.get("id") or 0) > after_id]
 
     def _append_soi_log(self, msg: str | dict[str, Any]) -> None:
         if isinstance(msg, dict):
@@ -60,6 +75,17 @@ class ChatApp:
             self._soi_seq += 1
             row["id"] = self._soi_seq
             self.soi_log.append(row)
+        event = str(row.get("event") or "")
+        if event in {"model_ask", "model_reply", "model_error"}:
+            self._append_raw(
+                source="soi",
+                event=event,
+                phase=row.get("phase"),
+                text=row.get("text") or row.get("preview") or row.get("reply") or "",
+                preview=row.get("preview"),
+                reply=row.get("reply"),
+                error=row.get("error"),
+            )
 
     def soi_lines_after(self, after_id: int = 0) -> list[dict[str, Any]]:
         with self.lock:
@@ -114,6 +140,8 @@ class ChatApp:
                 ],
                 "soi_log": list(self.soi_log),
                 "soi_log_seq": self._soi_seq,
+                "raw_log_seq": self._raw_seq,
+                "last_raw": list(self.raw_log)[-1] if self.raw_log else None,
             }
         base.update(self.tts_status())
         return base
@@ -127,6 +155,7 @@ class ChatApp:
                 reply = self.session.ask(text)
             except OllamaError as exc:
                 return {"ok": False, "error": str(exc)}
+            self._append_raw(source="oac", user=text, reply=reply, model=self.config.model)
             return {
                 "ok": True,
                 "reply": reply,
@@ -188,38 +217,39 @@ class ChatApp:
                 pipe.feed(delta)
 
         def _run() -> None:
+            reply = ""
             try:
                 with self.lock:
                     reply = self.session.ask(text, stream=True, on_token=_on_token)
-                    if pipe is not None:
-                        pipe.close()
-                    events.put(
-                        {
-                            "type": "done",
-                            "ok": True,
-                            "reply": reply,
-                            "mode": self.session.mode.id,
-                            "session_id": self.session.session_id,
-                            "soi_running": self.watcher.running,
-                            "voice": bool(pipe is not None),
-                            **self.tts_status(),
-                        }
+                    self._append_raw(
+                        source="oac",
+                        user=text,
+                        reply=reply,
+                        model=self.config.model,
                     )
+                    done_payload = {
+                        "type": "done",
+                        "ok": True,
+                        "reply": reply,
+                        "mode": self.session.mode.id,
+                        "session_id": self.session.session_id,
+                        "soi_running": self.watcher.running,
+                        "voice": bool(pipe is not None),
+                        **self.tts_status(),
+                    }
+                # Unlock the UI as soon as the model finishes — don't wait on TTS.
+                events.put(done_payload)
             except OllamaError as exc:
-                if pipe is not None:
-                    try:
-                        pipe.close(timeout=1.0)
-                    except Exception:
-                        pass
                 events.put({"type": "error", "error": str(exc)})
             except Exception as exc:
-                if pipe is not None:
-                    try:
-                        pipe.close(timeout=1.0)
-                    except Exception:
-                        pass
                 events.put({"type": "error", "error": str(exc)})
             finally:
+                if pipe is not None:
+                    try:
+                        # Keep this short so a hung TTS server cannot pin the stream open.
+                        pipe.close(timeout=20.0)
+                    except Exception:
+                        pass
                 events.put(None)
 
         threading.Thread(target=_run, name="ainet-chat-stream", daemon=True).start()
@@ -318,6 +348,22 @@ def make_handler(app: ChatApp):
                     "ok": True,
                     "soi_running": app.watcher.running,
                     "lines": app.soi_lines_after(after),
+                    "events": app.soi_lines_after(after),
+                    "event_seq": app._soi_seq,
+                }
+                status, body, ctype = _json_bytes(payload)
+                self._send(status, body, ctype)
+                return
+            if path == "/api/ollama-raw":
+                try:
+                    after = int((qs.get("after") or ["0"])[0] or 0)
+                except ValueError:
+                    after = 0
+                payload = {
+                    "ok": True,
+                    "model": app.config.model,
+                    "lines": app.raw_lines_after(after),
+                    "seq": app._raw_seq,
                 }
                 status, body, ctype = _json_bytes(payload)
                 self._send(status, body, ctype)
