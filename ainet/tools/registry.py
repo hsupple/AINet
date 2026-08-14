@@ -9,7 +9,7 @@ from ainet.tools.ops import DatabaseTools
 from ainet.tools.paths import PathError
 from ainet.tools.permissions import PermissionError_
 from ainet.tools.research import inspect_research, save_research
-from ainet.tools.web import web_fetch, web_search
+from ainet.tools.web import image_search, web_fetch, web_search
 
 # OAC-safe tools (no general DB mutations). Kept in sync with ollama.modes.base.
 READ_TOOL_NAMES = frozenset(
@@ -20,6 +20,7 @@ READ_TOOL_NAMES = frozenset(
         "read_json",
         "web_search",
         "web_fetch",
+        "image_search",
         "open_chrome",
         "list_projects",
     }
@@ -480,6 +481,38 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "image_search",
+            "description": (
+                "Search for pictures (photos, diagrams, screenshots). Returns image URLs "
+                "and thumbnails that the chat UI will show. Also opens Google Images in "
+                "Chrome unless the user opted out. Use when Hayden asks to see photos, "
+                "what something looks like, or images from the web / Google."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to find pictures of",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "default": 6,
+                        "description": "Number of images (1-8).",
+                    },
+                    "open_google": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Open a Google Images tab in Chrome (default true).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_fetch",
             "description": (
                 "Fetch a public http(s) URL and return truncated plain text. "
@@ -855,6 +888,11 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
         "web_search": lambda **kw: web_search(
             kw["query"],
             count=int(kw.get("count", 5)),
+        ),
+        "image_search": lambda **kw: image_search(
+            kw["query"],
+            count=int(kw.get("count", 6)),
+            open_google=bool(kw["open_google"]) if "open_google" in kw else True,
         ),
         "web_fetch": lambda **kw: web_fetch(
             kw["url"],

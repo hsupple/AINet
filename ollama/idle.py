@@ -34,6 +34,7 @@ class IdleSOIWatcher:
         self._busy = threading.Lock()
         self._next_ok_at = 0.0
         self._thread = threading.Thread(target=self._loop, name="soi-idle", daemon=True)
+        self.worker: SOIWorker | None = None
 
     @property
     def busy(self) -> bool:
@@ -68,6 +69,12 @@ class IdleSOIWatcher:
         """Stop an in-flight SOI filing/refresh as soon as practical."""
         self._cancel_job.set()
         self._kick.clear()
+        worker = self.worker
+        if worker is not None:
+            try:
+                worker.interrupt()
+            except Exception:
+                pass
         if not self.busy:
             self._active.clear()
             return {"stopped": True, "reason": "SOI was idle"}
@@ -78,10 +85,17 @@ class IdleSOIWatcher:
         self._cancel_job.set()
         self._kick.set()
         self._active.clear()
+        worker = self.worker
+        if worker is not None:
+            try:
+                worker.interrupt()
+            except Exception:
+                pass
 
     def _loop(self) -> None:
         logger = SOILogger(self.config.db_root, on_status=self.on_status)
         worker = SOIWorker(self.config, on_status=self.on_status, logger=logger)
+        self.worker = worker
         logger.log(
             "watcher_start",
             soi_idle_seconds=self.config.soi_idle_seconds,

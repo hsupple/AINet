@@ -62,20 +62,51 @@ def split_reply(text: str) -> tuple[str, str | None]:
 
 
 def host_fallback_memory(user_text: str, assistant_text: str, prior: str = "") -> str:
-    """If the model skips %%mem%%, keep a usable standing-ask summary."""
+    """If the model skips %%mem%%, retain a labeled rolling-memory block."""
     ask = " ".join((user_text or "").split())[:140]
     gist = " ".join((assistant_text or "").split())[:140]
-    lines: list[str] = []
-    first_prior = (prior or "").split("\n")[0].strip()
-    if first_prior:
-        lines.append(first_prior[:160])
-    if ask:
-        nxt = f"Hayden's ask: {ask}"
-        if not first_prior or nxt.casefold() != first_prior.casefold():
-            lines.append(nxt)
-    if gist:
-        lines.append(f"Last said: {gist}")
-    return cap_memory("\n".join(lines))
+    fields = _memory_fields(prior)
+    standing = fields.get("standing request") or ask
+    context = fields.get("context") or ""
+    return cap_memory(
+        "\n".join(
+            (
+                f"Standing request: {standing}",
+                f"Context: {context}",
+                f"Last answer: {gist}",
+            )
+        )
+    )
+
+
+def _memory_fields(memory: str) -> dict[str, str]:
+    """Read labeled memory and map legacy positional lines for old sessions."""
+    lines = [line.strip() for line in (memory or "").splitlines() if line.strip()]
+    fields: dict[str, str] = {}
+    labels = ("standing request", "context", "last answer")
+    for line in lines[:3]:
+        key, sep, value = line.partition(":")
+        normalized = key.strip().casefold()
+        if sep and normalized in labels:
+            fields[normalized] = value.strip()
+    if fields:
+        return fields
+    for label, line in zip(labels, lines[:3]):
+        fields[label] = line.removeprefix("- ").strip()
+    return fields
+
+
+def _labeled_memory(memory: str) -> str:
+    fields = _memory_fields(memory)
+    return cap_memory(
+        "\n".join(
+            (
+                f"Standing request: {fields.get('standing request', '')}",
+                f"Context: {fields.get('context', '')}",
+                f"Last answer: {fields.get('last answer', '')}",
+            )
+        )
+    )
 
 
 _URL_RE = re.compile(r"https?://[^\s\]\)>'\"<>]+")
@@ -136,17 +167,15 @@ def last_turn_block(
 
 
 def memory_system_suffix(memory: str) -> str:
-    body = (memory or "").strip()
-    if not body:
-        body = "(empty — first turn)"
+    body = _labeled_memory(memory)
     return (
-        "\n\nRolling memory (host hides this from Hayden). "
-        "After your spoken reply, rewrite it in full:\n"
+        "\n\nROLLING MEMORY STATE\n"
+        "This is hidden host context, not spoken text:\n"
         f"{MEM_OPEN}\n{body}\n{MEM_CLOSE}\n"
-        "Line 1 = Hayden's standing request (keep until they change it). "
-        "Line 2–3 = constraints + what you last recommended. "
-        "Follow-ups still mean that standing request. "
-        "Never mention this block aloud."
+        "After the spoken reply, replace it with exactly three concise labeled lines: "
+        "Standing request, Context, and Last answer. "
+        "Keep the standing request until Hayden changes it. "
+        "End with %%end%%. Never mention this block aloud."
     )
 
 

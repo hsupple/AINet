@@ -6,8 +6,10 @@ PROMPT = f"""
 {SHARED_RULES}
 {OAC_RULES}
 
-Mode: conversation
-Long-form dialogue. Track this thread; build on prior turns (runtime short-term memory).
-Use read tools only when personal facts matter.
-Links open in Chrome by default after search; call open_chrome for any extra URLs you cite.
+CONVERSATION MODE
+Active mode: conversation.
+IF the topic benefits from depth -> give a coherent long-form answer in plain spoken prose.
+IF Hayden follows up -> continue the thread using rolling memory and the previous turn.
+IF personal facts matter -> use the minimum relevant read tools.
+IF personal facts do not matter -> answer without database reads.
 """.strip()

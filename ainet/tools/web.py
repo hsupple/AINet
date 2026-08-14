@@ -12,7 +12,12 @@ from html.parser import HTMLParser
 from typing import Any
 
 BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+BRAVE_IMAGES_URL = "https://api.search.brave.com/res/v1/images/search"
 _USER_AGENT = "AINet/1.0 (+local; Brave Search)"
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+)
 _DEFAULT_SEARCH_COUNT = 5
 _MAX_SEARCH_COUNT = 8
 _TITLE_MAX = 120
@@ -21,6 +26,8 @@ _FETCH_DEFAULT_CHARS = 4000
 _FETCH_MAX_CHARS = 12000
 _FETCH_BYTE_CAP = 500_000
 _HTTP_TIMEOUT_S = 20.0
+_PREVIEW_TIMEOUT_S = 4.0
+_PREVIEW_BYTE_CAP = 120_000
 
 # Higher rank = more preferred for Deep Research. Not medical-only —
 # societies, publishers, preprint servers, and gov/edu labs across fields.
@@ -134,12 +141,140 @@ def _clip(text: str, limit: int) -> str:
     return text[: max(0, limit - 1)] + "…"
 
 
+def _http_url(value: str) -> str:
+    s = (value or "").strip()
+    if s.startswith(("http://", "https://")):
+        return s
+    return ""
+
+
+def _source_host(item: dict[str, Any] | None, url: str) -> str:
+    meta = item.get("meta_url") if isinstance(item, dict) else None
+    host = ""
+    if isinstance(meta, dict):
+        host = str(meta.get("hostname") or meta.get("netloc") or "").strip()
+    if not host:
+        host = urllib.parse.urlparse(url).netloc
+    host = host.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _brave_thumbnail(item: dict[str, Any]) -> str:
+    thumb = item.get("thumbnail")
+    if isinstance(thumb, dict):
+        return _http_url(str(thumb.get("original") or thumb.get("src") or ""))
+    if isinstance(thumb, str):
+        return _http_url(thumb)
+    return ""
+
+
+def _youtube_thumb(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower()
+    vid = ""
+    if "youtube.com" in host:
+        vid = (urllib.parse.parse_qs(parsed.query).get("v") or [""])[0]
+    elif "youtu.be" in host:
+        vid = parsed.path.strip("/").split("/")[0]
+    if vid and re.fullmatch(r"[\w-]{6,20}", vid):
+        return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+    return ""
+
+
+class _OgImageParser(HTMLParser):
+    """Pull og:image / twitter:image from a page head."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.image = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.image or tag.lower() != "meta":
+            return
+        props = {str(k).lower(): (v or "") for k, v in attrs}
+        key = (props.get("property") or props.get("name") or "").lower()
+        content = (props.get("content") or "").strip()
+        if key in {"og:image", "og:image:url", "twitter:image", "twitter:image:src"} and content:
+            self.image = content
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+
+def _page_og_image(url: str) -> str:
+    yt = _youtube_thumb(url)
+    if yt:
+        return yt
+    try:
+        raw, ctype = _http_get(
+            url,
+            headers={
+                "User-Agent": _BROWSER_UA,
+                "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            },
+            timeout=_PREVIEW_TIMEOUT_S,
+            max_bytes=_PREVIEW_BYTE_CAP,
+        )
+    except ValueError:
+        return ""
+    if ctype and "html" not in ctype and "xml" not in ctype:
+        return ""
+    try:
+        html = raw.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    parser = _OgImageParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        return ""
+    img = parser.image.strip()
+    if not img:
+        return ""
+    abs_url = urllib.parse.urljoin(url, img)
+    return _http_url(abs_url)
+
+
+def article_preview_images(urls: list[str]) -> dict[str, str]:
+    """Best-effort og:image (or YouTube thumb) for opened article URLs."""
+    clean: list[str] = []
+    seen: set[str] = set()
+    for raw in urls:
+        u = _http_url(str(raw or ""))
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        clean.append(u)
+    if not clean:
+        return {}
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    found: dict[str, str] = {}
+    workers = min(3, len(clean))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = {pool.submit(_page_og_image, u): u for u in clean}
+        for fut in as_completed(futs):
+            src = futs[fut]
+            try:
+                img = fut.result() or ""
+            except Exception:
+                img = ""
+            if img:
+                found[src] = img
+    return found
+
+
 def _http_get(
     url: str,
     *,
     headers: dict[str, str] | None = None,
     timeout: float = _HTTP_TIMEOUT_S,
+    max_bytes: int | None = None,
 ) -> tuple[bytes, str]:
+    cap = _FETCH_BYTE_CAP if max_bytes is None else max(1024, int(max_bytes))
     req = urllib.request.Request(
         url,
         headers={
@@ -152,9 +287,9 @@ def _http_get(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-            data = resp.read(_FETCH_BYTE_CAP + 1)
-            if len(data) > _FETCH_BYTE_CAP:
-                data = data[:_FETCH_BYTE_CAP]
+            data = resp.read(cap + 1)
+            if len(data) > cap:
+                data = data[:cap]
             return data, ctype
     except urllib.error.HTTPError as exc:
         body = ""
@@ -254,7 +389,16 @@ def web_search(query: str, count: int = _DEFAULT_SEARCH_COUNT) -> dict[str, Any]
         )
         if not link:
             continue
-        results.append({"title": title, "url": link, "snippet": snippet})
+        row: dict[str, str] = {
+            "title": title,
+            "url": link,
+            "snippet": snippet,
+            "source": _source_host(item, link),
+        }
+        thumb = _brave_thumbnail(item)
+        if thumb:
+            row["thumbnail"] = thumb
+        results.append(row)
 
     results = _prefer_academic(results)
     return {
@@ -264,6 +408,112 @@ def web_search(query: str, count: int = _DEFAULT_SEARCH_COUNT) -> dict[str, Any]
         "results": results,
         "provider": "brave",
     }
+
+
+def image_search(
+    query: str,
+    count: int = 6,
+    *,
+    open_google: bool = True,
+) -> dict[str, Any]:
+    """Search public images via Brave. Optionally open Google Images in Chrome."""
+    q = (query or "").strip()
+    if not q:
+        raise ValueError("query is required")
+    try:
+        n = int(count)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("count must be an integer") from exc
+    n = max(1, min(8, n))
+
+    results: list[dict[str, str]] = []
+    brave_error = ""
+    try:
+        key = _api_key()
+        params = urllib.parse.urlencode(
+            {
+                "q": q,
+                "count": str(n),
+                "safesearch": "strict",
+                "spellcheck": "1",
+            }
+        )
+        raw, _ctype = _http_get(
+            f"{BRAVE_IMAGES_URL}?{params}",
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": key,
+            },
+        )
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Brave Images returned non-JSON: {exc}") from exc
+
+        rows = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            rows = []
+
+        for item in rows[:n]:
+            if not isinstance(item, dict):
+                continue
+            props = item.get("properties") if isinstance(item.get("properties"), dict) else {}
+            thumb_obj = item.get("thumbnail") if isinstance(item.get("thumbnail"), dict) else {}
+            meta = item.get("meta_url") if isinstance(item.get("meta_url"), dict) else {}
+            image_url = str(props.get("url") or item.get("url") or "").strip()
+            thumb = str(thumb_obj.get("src") or image_url).strip()
+            host = str(meta.get("hostname") or meta.get("netloc") or "").strip()
+            path = str(meta.get("path") or "").strip()
+            page_url = str(item.get("url") or "").strip()
+            if host and path and not page_url.startswith("http"):
+                scheme = str(meta.get("scheme") or "https")
+                page_url = f"{scheme}://{host}{path if path.startswith('/') else '/' + path}"
+            elif host and not page_url.startswith("http"):
+                page_url = f"https://{host}"
+            title = _clip(str(item.get("title") or host or "image"), _TITLE_MAX)
+            show = thumb or image_url
+            if not show.startswith(("http://", "https://")):
+                continue
+            results.append(
+                {
+                    "title": title,
+                    "url": page_url if page_url.startswith("http") else show,
+                    "page_url": page_url if page_url.startswith("http") else "",
+                    "image_url": image_url if image_url.startswith("http") else show,
+                    "thumbnail": show,
+                    "source": host or urllib.parse.urlparse(show).netloc,
+                }
+            )
+    except ValueError as exc:
+        brave_error = str(exc)
+
+    google_url = "https://www.google.com/search?" + urllib.parse.urlencode(
+        {"tbm": "isch", "q": q}
+    )
+    opened: list[dict[str, str]] = []
+    if open_google:
+        from ainet.tools.browser import open_chrome
+
+        chrome = open_chrome(google_url, new_tab=True)
+        if chrome.get("ok"):
+            opened.append({"title": f"Google Images: {q}", "url": google_url})
+
+    out: dict[str, Any] = {
+        "ok": bool(results or opened),
+        "query": q,
+        "count": len(results),
+        "results": results,
+        "provider": "brave",
+        "google_images": google_url,
+        "auto_opened": opened,
+    }
+    if brave_error:
+        out["brave_error"] = brave_error
+    if not results and opened:
+        out["note"] = "Thumbnails unavailable; opened Google Images in Chrome."
+    if not out["ok"]:
+        out["error"] = brave_error or "no images found"
+    return out
 
 
 def web_fetch(url: str, max_chars: int = _FETCH_DEFAULT_CHARS) -> dict[str, Any]:

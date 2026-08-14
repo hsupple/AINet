@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import parse_qs, urlparse
 
-from ollama.client import OllamaCancelled, OllamaError
+from ollama.client import OllamaCancelled, OllamaClient, OllamaError
 from ollama.config import OllamaConfig
 from ollama.idle import IdleSOIWatcher
+from ollama.inference_gate import INFERENCE_GATE
 from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
 from ollama.session import ChatSession
 
@@ -35,6 +36,7 @@ class ChatApp:
         self.soi_log: deque[dict[str, Any]] = deque(maxlen=500)
         self._raw_seq = 0
         self.raw_log: deque[dict[str, Any]] = deque(maxlen=300)
+        self._last_error: str | None = None
         self.session = ChatSession(
             mode=get_mode(mode_id),
             config=config,
@@ -134,6 +136,12 @@ class ChatApp:
                 "soi_log_seq": self._soi_seq,
                 "raw_log_seq": self._raw_seq,
                 "last_raw": list(self.raw_log)[-1] if self.raw_log else None,
+                "last_error": self._last_error,
+                "hang": {
+                    "ask_lock": self._ask_lock.locked(),
+                    "chat_cancel": self.session.cancelled(),
+                    "inference": INFERENCE_GATE.snapshot(),
+                },
             }
         base.update(self.tts_status())
         return base
@@ -225,7 +233,16 @@ class ChatApp:
                 }
                 if isinstance(detail.get("research"), dict):
                     payload["research"] = detail["research"]
+                imgs = detail.get("images")
+                if isinstance(imgs, list) and imgs:
+                    payload["images"] = imgs[:8]
+                articles = detail.get("articles")
+                if isinstance(articles, list) and articles:
+                    payload["articles"] = articles[:3]
                 events.put(payload)
+
+        def _on_context(snap: dict[str, Any]) -> None:
+            events.put({"type": "context", **(snap or {})})
 
         def _run() -> None:
             reply = ""
@@ -252,6 +269,10 @@ class ChatApp:
                         stream=True,
                         on_token=_on_token,
                         on_tool=_on_tool,
+                        on_context=_on_context,
+                        on_wait=lambda snap: events.put(
+                            {"type": "status", "phase": "queued", **(snap or {})}
+                        ),
                     )
                     cancelled = self.session.cancelled()
                 finally:
@@ -297,8 +318,12 @@ class ChatApp:
                     }
                 )
             except OllamaError as exc:
+                self._last_error = str(exc)
+                self._append_raw(source="oac", event="error", error=str(exc))
                 events.put({"type": "error", "error": str(exc)})
             except Exception as exc:
+                self._last_error = str(exc)
+                self._append_raw(source="oac", event="error", error=str(exc))
                 events.put({"type": "error", "error": str(exc)})
             finally:
                 if acquired:
@@ -309,27 +334,38 @@ class ChatApp:
                 events.put(None)
 
         threading.Thread(target=_run, name="ainet-chat-stream", daemon=True).start()
-        idle_s = 0.0
-        stall_limit_s = 90.0
+        stall_limit_s = 60.0
+        last_progress = time.monotonic()
         while True:
             try:
                 item = events.get(timeout=1.0)
             except queue.Empty:
-                idle_s += 1.0
-                if idle_s >= stall_limit_s:
-                    self.session.request_cancel()
-                    yield {
-                        "type": "error",
-                        "error": (
-                            "Model stalled with no output — context may be too long. "
-                            "Try New session, or send a shorter follow-up."
-                        ),
-                    }
+                item = None
+                empty = True
+            else:
+                empty = False
+                if item is None:
                     break
-                continue
-            idle_s = 0.0
-            if item is None:
+
+            # Wall clock, not a tick count: "queued" status heartbeats arrive every
+            # second and must not disguise a model that is producing nothing.
+            if time.monotonic() - last_progress >= stall_limit_s:
+                self.session.request_cancel()
+                self.watcher.cancel_job()
+                INFERENCE_GATE.force_reset()
+                err = "Model stalled with no output. Press Reset AI if Stop does nothing."
+                self._last_error = err
+                self._append_raw(source="oac", event="stall", error=err)
+                yield {"type": "error", "error": err}
                 break
+
+            if empty:
+                # Keeps the socket provably alive so a dead client is detected here
+                # instead of leaking a connection until the turn ends.
+                yield {"type": "ping"}
+                continue
+            if item.get("type") != "status":
+                last_progress = time.monotonic()
             yield item
 
     def cancel(self, *, chat: bool = True, soi: bool = True) -> dict[str, Any]:
@@ -341,10 +377,40 @@ class ChatApp:
             out["soi"] = bool(self.watcher.cancel_job().get("stopped"))
         return {**out, **self.status()}
 
-    def reset(self) -> dict[str, Any]:
+    def reset(self, *, hard: bool = False) -> dict[str, Any]:
+        old = self.session
+        old.request_cancel()
+        if hard:
+            self.watcher.cancel_job()
+            INFERENCE_GATE.force_reset()
+            try:
+                old.client.cancel_active()
+            except Exception:
+                pass
         with self.lock:
-            self.session.reset()
-            return {"ok": True, **self.status()}
+            if hard:
+                mode_id = old.mode.id
+                auto = old.auto_mode
+                self.session = ChatSession(
+                    mode=get_mode(mode_id),
+                    config=self.config,
+                    auto_mode=auto,
+                    resume_session=False,
+                )
+                self.session.reset()
+                self.watcher.session = self.session
+                # Zombie ask threads may still hold the old lock; new turns use this one.
+                self._ask_lock = threading.Lock()
+            else:
+                self.session.reset()
+            self.session.clear_cancel()
+            self._last_error = None
+            self._append_raw(
+                source="sys",
+                event="hard_reset" if hard else "reset",
+                text="Reset AI" if hard else "New session",
+            )
+            return {"ok": True, "hard": hard, **self.status()}
 
     def set_mode(self, mode_id: str) -> dict[str, Any]:
         with self.lock:
@@ -439,12 +505,31 @@ def make_handler(app: ChatApp):
             self.end_headers()
             self.wfile.write(body)
 
+        def _fail(self, exc: BaseException) -> None:
+            try:
+                status, body, ctype = _json_bytes(
+                    {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, 500
+                )
+                self._send(status, body, ctype)
+            except Exception:
+                try:
+                    self.wfile.write(b"HTTP/1.1 500 Internal Server Error\r\n\r\n")
+                except Exception:
+                    pass
+
         def do_OPTIONS(self) -> None:  # noqa: N802
             self.send_response(204)
             self._cors()
             self.end_headers()
 
         def do_GET(self) -> None:  # noqa: N802
+            try:
+                self._do_GET()
+            except Exception as exc:
+                print(f"GET {self.path} crashed: {exc}", file=__import__("sys").stderr, flush=True)
+                self._fail(exc)
+
+        def _do_GET(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path
             qs = parse_qs(parsed.query)
@@ -511,15 +596,19 @@ def make_handler(app: ChatApp):
                     after = int((qs.get("after") or ["0"])[0] or 0)
                 except ValueError:
                     after = 0
+                # Must close after each burst — keep-alive SSE holds a browser
+                # connection forever and starves Reset / chat when Ollama wedges.
+                self.close_connection = True
                 self.send_response(200)
                 self._cors()
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
+                self.send_header("Connection", "close")
                 self.send_header("X-Accel-Buffering", "no")
                 self.end_headers()
+                deadline = time.monotonic() + 25.0
                 try:
-                    while True:
+                    while time.monotonic() < deadline:
                         rows = app.soi_lines_after(after)
                         if rows:
                             after = int(rows[-1].get("id") or after)
@@ -533,12 +622,20 @@ def make_handler(app: ChatApp):
                         )
                         self.wfile.write(f"data: {blob}\n\n".encode("utf-8"))
                         self.wfile.flush()
-                        time.sleep(0.35)
+                        time.sleep(0.4)
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
-                    return
+                    pass
+                return
             self._send(404, b'{"ok":false,"error":"not found"}', "application/json")
 
         def do_POST(self) -> None:  # noqa: N802
+            try:
+                self._do_POST()
+            except Exception as exc:
+                print(f"POST {self.path} crashed: {exc}", file=__import__("sys").stderr, flush=True)
+                self._fail(exc)
+
+        def _do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
@@ -558,11 +655,12 @@ def make_handler(app: ChatApp):
                 self._send(status, body, ctype)
                 return
             if path == "/api/chat-stream":
+                self.close_connection = True
                 self.send_response(200)
                 self._cors()
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
+                self.send_header("Connection", "close")
                 self.send_header("X-Accel-Buffering", "no")
                 self.end_headers()
                 try:
@@ -575,7 +673,6 @@ def make_handler(app: ChatApp):
                         self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
                     app.cancel(chat=True, soi=False)
-                    return
                 return
             if path == "/api/cancel":
                 chat = data.get("chat", True)
@@ -586,7 +683,9 @@ def make_handler(app: ChatApp):
                 self._send(status, body, ctype)
                 return
             if path == "/api/reset":
-                status, body, ctype = _json_bytes(app.reset())
+                status, body, ctype = _json_bytes(
+                    app.reset(hard=bool(data.get("hard")))
+                )
                 self._send(status, body, ctype)
                 return
             if path == "/api/mode":

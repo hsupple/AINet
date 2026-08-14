@@ -107,6 +107,12 @@
       font-weight: 600;
     }
     #soi:hover { background: #0a7a48; }
+    #hard-reset {
+      font-weight: 600;
+      border-color: #e4c4bb;
+      color: #8a3324;
+    }
+    #hard-reset:hover { background: #f8ece8; border-color: #c2472c; }
 
     .meta {
       text-align: right;
@@ -420,6 +426,130 @@
       background: rgba(194, 71, 44, 0.1);
     }
 
+    .img-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+      gap: 0.45rem;
+      margin: 0.15rem 0 0.15rem;
+    }
+    .img-tile {
+      display: block;
+      position: relative;
+      aspect-ratio: 1;
+      overflow: hidden;
+      border-radius: 12px;
+      background: #e8ebe6;
+      text-decoration: none;
+      color: inherit;
+      box-shadow: var(--shadow-card);
+    }
+    .img-tile img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .img-cap {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 0.35rem 0.4rem 0.3rem;
+      font-size: 0.65rem;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(transparent, rgba(18, 20, 18, 0.72));
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .msg.bot .md img {
+      max-width: min(100%, 28rem);
+      height: auto;
+      border-radius: 12px;
+      margin: 0.4rem 0;
+    }
+
+    .article-cards {
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      margin: 0.1rem 0 0.15rem;
+    }
+    .article-card {
+      display: grid;
+      grid-template-columns: 8.4rem 1fr;
+      gap: 0.8rem;
+      align-items: stretch;
+      padding: 0.7rem;
+      border-radius: 16px;
+      background: #fff;
+      box-shadow: var(--shadow-card);
+      text-decoration: none;
+      color: inherit;
+      animation: tool-in 380ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
+    }
+    .article-card.hero {
+      grid-template-columns: 1fr;
+      padding: 0;
+      overflow: hidden;
+    }
+    .article-card.no-thumb {
+      grid-template-columns: 1fr;
+    }
+    .article-thumb {
+      overflow: hidden;
+      border-radius: 10px;
+      background: #e8ebe6;
+      min-height: 5.6rem;
+    }
+    .article-card.hero .article-thumb {
+      border-radius: 0;
+      aspect-ratio: 16 / 9;
+      min-height: 0;
+    }
+    .article-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .article-body {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.2rem;
+    }
+    .article-card.hero .article-body {
+      padding: 0.85rem 0.95rem 0.95rem;
+    }
+    .article-kicker {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .article-title {
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      font-size: 0.95rem;
+      line-height: 1.3;
+    }
+    .article-card.hero .article-title {
+      font-size: 1.05rem;
+    }
+    .article-snip {
+      color: var(--muted);
+      font-size: 0.8rem;
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
     @keyframes tool-in {
       from { opacity: 0; transform: translateY(8px) scale(0.985); }
       to { opacity: 1; transform: none; }
@@ -497,7 +627,10 @@
     .soi-panel.view-raw #soi-feed { display: none; }
     .soi-panel.view-doc #soi-out,
     .soi-panel.view-doc #soi-feed { display: none; }
+    .soi-panel.view-dev #soi-out,
+    .soi-panel.view-dev #soi-feed { display: none; }
     .soi-panel:not(.view-doc) #doc-preview { display: none; }
+    .soi-panel:not(.view-dev) #dev-context { display: none; }
     #soi-out:empty::before,
     #soi-feed:empty::before {
       content: "SOI activity will appear here…";
@@ -519,6 +652,83 @@
       color: var(--muted);
       font-family: "Figtree", sans-serif;
       font-size: 0.8rem;
+    }
+    #dev-context {
+      position: absolute;
+      inset: 0;
+      overflow-y: auto;
+      padding: 0.75rem 0.85rem 1.1rem;
+      background: #f7f8f5;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 0.72rem;
+      line-height: 1.45;
+      color: #2a332e;
+    }
+    #dev-context:empty::before {
+      content: "Send a message to see the extra context the model gets…";
+      color: var(--muted);
+      font-family: "Figtree", sans-serif;
+      font-size: 0.8rem;
+    }
+    .dev-meta {
+      font-family: "Figtree", sans-serif;
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin: 0 0 0.75rem;
+      letter-spacing: 0.02em;
+    }
+    .dev-section {
+      margin: 0 0 0.75rem;
+      padding: 0.65rem 0.7rem;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: var(--shadow-card);
+    }
+    .dev-section h3 {
+      margin: 0 0 0.4rem;
+      font-family: "Figtree", sans-serif;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .dev-section pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: inherit;
+      color: #1d2620;
+    }
+    .dev-msg {
+      margin: 0 0 0.55rem;
+      padding: 0.5rem 0.55rem;
+      border-radius: 10px;
+      background: #eef1ec;
+    }
+    .dev-msg:last-child { margin-bottom: 0; }
+    .dev-role {
+      font-family: "Figtree", sans-serif;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+    .dev-tools {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+    }
+    .dev-tools span {
+      font-family: "Figtree", sans-serif;
+      font-size: 0.7rem;
+      padding: 0.2rem 0.45rem;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
     }
     .doc-meta {
       font-size: 0.72rem;
@@ -761,6 +971,7 @@
         <div class="toolbar">
           <select id="mode" title="Mode"></select>
           <button type="button" id="reset">New session</button>
+          <button type="button" id="hard-reset" title="Cancel stuck chat/SOI and start a fresh session">Reset AI</button>
           <button type="button" id="soi">Start SOI</button>
         </div>
       </div>
@@ -779,6 +990,7 @@
               <button type="button" id="soi-view-panel" data-view="panel">SOI</button>
               <button type="button" id="soi-view-raw" data-view="raw">Raw</button>
               <button type="button" id="soi-view-doc" data-view="doc">Doc</button>
+              <button type="button" id="soi-view-dev" data-view="dev">Dev</button>
             </div>
           </div>
           <span id="soi-state">Idle</span>
@@ -787,6 +999,7 @@
           <div id="soi-feed"></div>
           <pre id="soi-out"></pre>
           <div id="doc-preview" aria-label="Research document preview"></div>
+          <div id="dev-context" aria-label="Model context inspector"></div>
         </div>
       </aside>
     </div>
@@ -794,7 +1007,7 @@
     <form id="form">
       <textarea id="input" rows="2" placeholder="Message…" autofocus></textarea>
       <button type="submit" id="send">Send</button>
-      <div class="hint">Enter to send · Shift+Enter for newline · Stop cancels a stuck reply · tools animate inline</div>
+      <div class="hint">Enter to send · Shift+Enter for newline · Stop cancels chat and SOI · Reset AI unsticks a frozen “…”</div>
     </form>
   </div>
 
@@ -817,12 +1030,36 @@
     const soiViewPanel = document.getElementById("soi-view-panel");
     const soiViewRaw = document.getElementById("soi-view-raw");
     const soiViewDoc = document.getElementById("soi-view-doc");
+    const soiViewDev = document.getElementById("soi-view-dev");
     const docPreview = document.getElementById("doc-preview");
+    const devContext = document.getElementById("dev-context");
     const sideLabel = document.getElementById("side-label");
     let busy = false;
     let chatAbort = null;
     let lastSoiId = 0;
+    let soiEs = null;
+    let soiStreamOk = false;
+    let lastChatEventAt = 0;
+    let stallNoticeShown = false;
     const pendingTools = new Map();
+
+    function closeSoiStream() {
+      soiStreamOk = false;
+      if (soiEs) {
+        try { soiEs.close(); } catch (e) {}
+        soiEs = null;
+      }
+    }
+
+    function checkChatWatchdog() {
+      if (!busy || !lastChatEventAt || stallNoticeShown) return;
+      if (Date.now() - lastChatEventAt < 25000) return;
+      stallNoticeShown = true;
+      addMessage(
+        "No response from the model for 25s. Press Reset AI to start a clean session.",
+        "sys"
+      );
+    }
 
     function isExternalHttpUrl(href) {
       try {
@@ -862,15 +1099,21 @@
 
     const SOI_VIEW_KEY = "ainet-soi-view";
     function setSoiView(view) {
-      const mode = view === "raw" ? "raw" : (view === "doc" ? "doc" : "panel");
+      const mode =
+        view === "raw" ? "raw" :
+        view === "doc" ? "doc" :
+        view === "dev" ? "dev" : "panel";
       soiPanel.classList.toggle("view-panel", mode === "panel");
       soiPanel.classList.toggle("view-raw", mode === "raw");
       soiPanel.classList.toggle("view-doc", mode === "doc");
+      soiPanel.classList.toggle("view-dev", mode === "dev");
       soiViewPanel.classList.toggle("on", mode === "panel");
       soiViewRaw.classList.toggle("on", mode === "raw");
       soiViewDoc.classList.toggle("on", mode === "doc");
+      if (soiViewDev) soiViewDev.classList.toggle("on", mode === "dev");
       if (sideLabel) {
-        sideLabel.innerHTML = mode === "doc" ? "<strong>Doc</strong>" : "<strong>SOI</strong>";
+        const labels = { doc: "Doc", raw: "Raw", dev: "Dev", panel: "SOI" };
+        sideLabel.innerHTML = "<strong>" + (labels[mode] || "SOI") + "</strong>";
       }
       try { localStorage.setItem(SOI_VIEW_KEY, mode); } catch (e) {}
     }
@@ -879,6 +1122,67 @@
     soiViewPanel.addEventListener("click", () => setSoiView("panel"));
     soiViewRaw.addEventListener("click", () => setSoiView("raw"));
     soiViewDoc.addEventListener("click", () => setSoiView("doc"));
+    if (soiViewDev) soiViewDev.addEventListener("click", () => setSoiView("dev"));
+
+    function renderDevContext(snap) {
+      if (!devContext || !snap || typeof snap !== "object") return;
+      const bits = [];
+      bits.push(
+        '<div class="dev-meta">mode <strong>' +
+        escapeHtml(snap.mode || "?") +
+        "</strong>" +
+        (snap.project_root ? " · project " + escapeHtml(String(snap.project_root)) : "") +
+        (snap.system_chars != null ? " · system " + snap.system_chars + " chars" : "") +
+        "</div>"
+      );
+      const sections = Array.isArray(snap.sections) ? snap.sections : [];
+      for (const sec of sections) {
+        if (!sec) continue;
+        const id = String(sec.id || "");
+        // Mode rules are long — keep them collapsed-looking but readable.
+        bits.push(
+          '<section class="dev-section" data-id="' + escapeHtml(id) + '">' +
+          "<h3>" + escapeHtml(sec.label || id || "Section") + "</h3>" +
+          "<pre>" + escapeHtml(sec.text || "") + "</pre>" +
+          "</section>"
+        );
+      }
+      const dialogue = Array.isArray(snap.dialogue) ? snap.dialogue : [];
+      if (dialogue.length) {
+        bits.push('<section class="dev-section"><h3>Dialogue this turn</h3>');
+        for (const m of dialogue) {
+          const role = String((m && m.role) || "msg");
+          let body = String((m && m.content) || "");
+          if (m && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+            body = (body ? body + "\n" : "") + "[tool_calls: " + m.tool_calls.join(", ") + "]";
+          }
+          bits.push(
+            '<div class="dev-msg"><div class="dev-role">' +
+            escapeHtml(role) +
+            "</div><pre>" +
+            escapeHtml(body || "(empty)") +
+            "</pre></div>"
+          );
+        }
+        bits.push("</section>");
+      }
+      const tools = Array.isArray(snap.tools) ? snap.tools : [];
+      if (tools.length) {
+        bits.push(
+          '<section class="dev-section"><h3>Tools available</h3><div class="dev-tools">' +
+          tools.map((t) => "<span>" + escapeHtml(t) + "</span>").join("") +
+          "</div></section>"
+        );
+      }
+      if (snap.system) {
+        bits.push(
+          '<section class="dev-section"><h3>Full system prompt</h3><pre>' +
+          escapeHtml(snap.system) +
+          "</pre></section>"
+        );
+      }
+      devContext.innerHTML = bits.join("");
+    }
 
     function escapeHtml(s) {
       return String(s || "")
@@ -989,6 +1293,7 @@
       tree: "Folder tree",
       web_search: "Web search",
       web_fetch: "Open page",
+      image_search: "Image search",
       open_chrome: "Open in Chrome",
       save_research: "Save research",
       inspect_research: "Inspect research",
@@ -1499,6 +1804,7 @@
       if (!detail && name === "save_research") detail = "Saving brief…";
       if (!detail && name === "web_fetch") detail = "Reading page…";
       if (!detail && name === "web_search") detail = "Searching…";
+      if (!detail && name === "image_search") detail = "Finding pictures…";
       if (detail) detailEl.textContent = detail;
       else detailEl.remove();
       el.dataset.arg = detail || "";
@@ -1533,16 +1839,128 @@
       const arg = el.dataset.arg || hintFromRow(row);
       const summary = prettySummary(row.summary || "");
       detailEl.textContent = [arg, summary].filter(Boolean).join("\n");
+      if (ok && Array.isArray(row.articles) && row.articles.length) {
+        renderArticleCards(msg._tools, row.articles);
+      }
+      if (ok && Array.isArray(row.images) && row.images.length) {
+        renderImageGallery(msg._tools, row.images);
+      }
       logEl.scrollTop = logEl.scrollHeight;
     }
 
+    function isHttpUrl(s) {
+      try {
+        const u = new URL(String(s || ""));
+        return u.protocol === "http:" || u.protocol === "https:";
+      } catch {
+        return false;
+      }
+    }
+
+    function renderImageGallery(parent, images) {
+      if (!parent || !Array.isArray(images) || !images.length) return;
+      const gal = document.createElement("div");
+      gal.className = "img-gallery";
+      for (const item of images.slice(0, 8)) {
+        if (!item || typeof item !== "object") continue;
+        const thumb = String(item.thumbnail || item.image_url || "").trim();
+        const href = String(item.page_url || item.url || item.image_url || thumb).trim();
+        if (!isHttpUrl(thumb)) continue;
+        const a = document.createElement("a");
+        a.className = "img-tile";
+        a.href = isHttpUrl(href) ? href : thumb;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.title = item.title || item.source || "";
+        const img = document.createElement("img");
+        img.src = thumb;
+        img.alt = item.title || "image";
+        img.loading = "lazy";
+        img.referrerPolicy = "no-referrer";
+        a.appendChild(img);
+        const cap = document.createElement("span");
+        cap.className = "img-cap";
+        cap.textContent = item.source || item.title || "";
+        a.appendChild(cap);
+        gal.appendChild(a);
+      }
+      if (gal.childElementCount) parent.appendChild(gal);
+    }
+
+    function renderArticleCards(parent, articles) {
+      if (!parent || !Array.isArray(articles) || !articles.length) return;
+      const wrap = document.createElement("div");
+      wrap.className = "article-cards";
+      const rows = articles.slice(0, 3);
+      const heroIdx = rows.findIndex((item) => isHttpUrl(item && (item.thumbnail || item.image_url)));
+      rows.forEach((item, i) => {
+        if (!item || typeof item !== "object") return;
+        const href = String(item.url || item.page_url || "").trim();
+        const thumb = String(item.thumbnail || item.image_url || "").trim();
+        const card = document.createElement(isHttpUrl(href) ? "a" : "div");
+        card.className = "article-card";
+        if (i === (heroIdx >= 0 ? heroIdx : 0) && isHttpUrl(thumb)) card.classList.add("hero");
+        if (!isHttpUrl(thumb)) card.classList.add("no-thumb");
+        if (card.tagName === "A") {
+          card.href = href;
+          card.target = "_blank";
+          card.rel = "noopener noreferrer";
+        }
+        if (isHttpUrl(thumb)) {
+          const media = document.createElement("div");
+          media.className = "article-thumb";
+          const img = document.createElement("img");
+          img.src = thumb;
+          img.alt = item.title || "Article";
+          img.loading = "lazy";
+          img.referrerPolicy = "no-referrer";
+          img.addEventListener("error", () => {
+            media.remove();
+            card.classList.remove("hero");
+            card.classList.add("no-thumb");
+          });
+          media.appendChild(img);
+          card.appendChild(media);
+        }
+        const body = document.createElement("div");
+        body.className = "article-body";
+        const kicker = document.createElement("div");
+        kicker.className = "article-kicker";
+        kicker.textContent = item.source ? "Opened · " + item.source : "Opened";
+        body.appendChild(kicker);
+        const title = document.createElement("div");
+        title.className = "article-title";
+        title.textContent = item.title || href || "Article";
+        body.appendChild(title);
+        if (item.snippet) {
+          const snip = document.createElement("div");
+          snip.className = "article-snip";
+          snip.textContent = item.snippet;
+          body.appendChild(snip);
+        }
+        card.appendChild(body);
+        wrap.appendChild(card);
+      });
+      if (wrap.childElementCount) parent.appendChild(wrap);
+    }
+
     function renderMeta(s) {
+      const hang = s.hang || {};
+      const inf = hang.inference || {};
+      const bits = [];
+      if (s.last_error) bits.push(String(s.last_error).slice(0, 140));
+      if (hang.ask_lock) bits.push("ask lock");
+      if (inf.locked) bits.push((inf.holder || "gpu") + " " + inf.held_s + "s");
+      const hangHtml = bits.length
+        ? "<br><span style=\"color:var(--danger)\">" + escapeHtml(bits.join(" · ")) + "</span>"
+        : "";
       meta.innerHTML =
         "<strong>" + (s.model || "?") + "</strong><br>" +
         "mode " + (s.mode || "?") +
         (s.project_name ? "<br>project " + s.project_name : "") +
         (s.session_id ? "<br>session " + s.session_id.slice(0, 8) : "") +
-        (s.soi_running ? "<br>SOI running" : "<br>SOI idle");
+        (s.soi_running ? "<br>SOI running" : "<br>SOI idle") +
+        hangHtml;
       if (Array.isArray(s.modes) && modeSel.options.length === 0) {
         for (const m of s.modes) {
           const opt = document.createElement("option");
@@ -1627,17 +2045,28 @@
       }
     }
 
-    async function post(path, body) {
-      const r = await fetch(path, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body || {}),
-      });
-      return r.json();
+    async function post(path, body, timeoutMs) {
+      const ctrl = new AbortController();
+      const timer = timeoutMs
+        ? setTimeout(() => ctrl.abort(), timeoutMs)
+        : null;
+      try {
+        const r = await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body || {}),
+          signal: ctrl.signal,
+        });
+        return await r.json();
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     }
 
     async function streamChat(message, botMsg, onDone) {
       chatAbort = new AbortController();
+      lastChatEventAt = Date.now();
+      stallNoticeShown = false;
       const r = await fetch("/api/chat-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1658,6 +2087,10 @@
 
       const handleEvent = (ev) => {
         if (!ev || typeof ev !== "object") return;
+        lastChatEventAt = Date.now();
+        if (ev.type === "ping") {
+          return;
+        }
         if (ev.type === "tool_start") {
           chatToolStart(botMsg, ev);
         } else if (ev.type === "tool_done") {
@@ -1665,6 +2098,16 @@
           if (ev.name === "save_research" && ev.ok) {
             const meta = ev.research || {};
             loadResearchBrief({ id: meta.id, path: meta.path });
+          }
+        } else if (ev.type === "context") {
+          renderDevContext(ev);
+        } else if (ev.type === "status") {
+          const who = ev.holder || ev.phase || "model";
+          const held = ev.held_s != null ? " (" + ev.held_s + "s)" : "";
+          const msg = "Waiting — " + who + " has Ollama" + held;
+          if (!full) {
+            body.classList.add("sys");
+            body.textContent = msg;
           }
         } else if (ev.type === "token") {
           const t = asText(ev.text);
@@ -1741,10 +2184,69 @@
     }
 
     async function stopChat() {
-      try { await post("/api/cancel", { chat: true, soi: false }); } catch (e) {}
       if (chatAbort) {
         try { chatAbort.abort(); } catch (e) {}
+        chatAbort = null;
       }
+      try { await post("/api/cancel", { chat: true, soi: true }, 2000); } catch (e) {}
+      setChatBusy(false);
+    }
+
+    function resetChatUi() {
+      setChatBusy(false);
+      chatAbort = null;
+      logEl.innerHTML = "";
+      setSoiUi(false);
+    }
+
+    async function resetAi(hard) {
+      // Free sockets first — a wedged chat + SOI stream can fill the browser's
+      // 6-connection pool so /api/reset never leaves the page.
+      setChatBusy(false);
+      lastChatEventAt = 0;
+      if (chatAbort) {
+        try { chatAbort.abort(); } catch (e) {}
+        chatAbort = null;
+      }
+      closeSoiStream();
+      const hanging = logEl.querySelector(".msg.bot:last-child");
+      if (hanging && hanging._body && (hanging._body.textContent === "…" || hanging._body.classList.contains("sys"))) {
+        hanging._body.classList.remove("sys", "streaming", "md");
+        hanging._body.classList.add("plain");
+        hanging._body.textContent = hard ? "Reset AI — cancelled." : "Stopped.";
+      }
+
+      if (hard) {
+        // Fire cancel+reset without awaiting forever, then reload no matter what.
+        const hardReset = (async () => {
+          try { await post("/api/cancel", { chat: true, soi: true }, 1500); } catch (e) {}
+          try { await post("/api/reset", { hard: true }, 2500); } catch (e) {}
+        })();
+        try { await Promise.race([hardReset, new Promise((r) => setTimeout(r, 3000))]); } catch (e) {}
+        resetChatUi();
+        location.reload();
+        return { ok: true };
+      }
+
+      let data;
+      try {
+        data = await post("/api/reset", { hard: false }, 5000);
+      } catch (err) {
+        addMessage("Reset failed — " + asText(err), "sys");
+        setChatBusy(false);
+        connectSoiStream();
+        return { ok: false };
+      }
+      if (data && data.ok) {
+        addMessage("New OAC session", "sys");
+        renderMeta(data);
+      } else {
+        addMessage(asText((data && data.error) || "Reset failed"), "sys");
+      }
+      setChatBusy(false);
+      connectSoiStream();
+      input.focus();
+      return data;
     }
 
     sendBtn.addEventListener("click", async (e) => {
@@ -1752,6 +2254,7 @@
       e.preventDefault();
       e.stopPropagation();
       await stopChat();
+      setChatBusy(false);
     });
 
     form.addEventListener("submit", async (e) => {
@@ -1765,6 +2268,7 @@
       botMsg._body.classList.add("sys");
       const unlockSend = () => {
         chatAbort = null;
+        lastChatEventAt = 0;
         setChatBusy(false);
         input.focus();
       };
@@ -1795,11 +2299,10 @@
     });
 
     document.getElementById("reset").addEventListener("click", async () => {
-      const data = await post("/api/reset", {});
-      if (data.ok) {
-        addMessage("New OAC session", "sys");
-        renderMeta(data);
-      }
+      try { await resetAi(false); } catch (err) { addMessage(asText(err), "sys"); }
+    });
+    document.getElementById("hard-reset").addEventListener("click", async () => {
+      try { await resetAi(true); } catch (err) { addMessage(asText(err), "sys"); }
     });
 
     soiBtn.addEventListener("click", async () => {
@@ -1855,8 +2358,10 @@
         setInterval(pullSoiLog, 800);
         return;
       }
-      const es = new EventSource("/api/soi-stream?after=0");
-      es.onmessage = (ev) => {
+      closeSoiStream();
+      soiEs = new EventSource("/api/soi-stream?after=" + lastSoiId);
+      soiEs.onmessage = (ev) => {
+        soiStreamOk = true;
         try {
           const s = JSON.parse(ev.data);
           appendSoiLines(s.lines || []);
@@ -1865,8 +2370,16 @@
           }
         } catch (err) {}
       };
-      es.onerror = () => {
+      soiEs.onerror = () => {
+        // Server closes the stream every ~25s so the connection pool stays free.
+        // EventSource auto-reconnects; if READYSTATE is CLOSED, reopen ourselves.
+        soiStreamOk = false;
         pullSoiLog();
+        if (soiEs && soiEs.readyState === 2) {
+          setTimeout(() => {
+            if (!soiEs || soiEs.readyState === 2) connectSoiStream();
+          }, 800);
+        }
       };
     }
 
@@ -1874,7 +2387,10 @@
     pullSoiLog();
     connectSoiStream();
     setInterval(refreshStatus, 8000);
-    setInterval(pullSoiLog, 1500);
+    // Only poll when the stream is down — a standing SSE plus a poll can starve
+    // the browser's per-origin connection pool if a chat stream wedges.
+    setInterval(() => { if (!soiStreamOk) pullSoiLog(); }, 1500);
+    setInterval(checkChatWatchdog, 5000);
   </script>
 </body>
 </html>

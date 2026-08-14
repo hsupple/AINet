@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable
 from typing import Any
 
@@ -16,7 +17,7 @@ from ainet.tools.project import (
     user_project_name_from_path,
 )
 from ainet.tools.registry import PROJECT_SESSION_TOOLS, catalog_tools, dispatch, tools_subset
-from ollama.client import OllamaCancelled, OllamaClient, ThinkingCallback, TokenCallback
+from ollama.client import OllamaCancelled, OllamaClient, OllamaError, ThinkingCallback, TokenCallback
 from ollama.content_filing import cop_name_in_text
 from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
@@ -29,7 +30,7 @@ from ollama.convo_memory import (
     split_reply,
 )
 from ollama.conversation_store import ConversationStore
-from ollama.prompts.shared import today_context
+from ollama.prompts.shared import CURRENT_DATE_TOKEN, today_context
 from ollama.inference_gate import INFERENCE_GATE
 from ollama.modes import get_mode
 from ollama.modes.base import READ_TOOLS, Mode
@@ -37,6 +38,8 @@ from ollama.router import suggest_mode
 
 # on_tool(phase, name, detail) — phase is "start" | "done"
 ToolCallback = Callable[[str, str, dict[str, Any]], None]
+WaitCallback = Callable[[dict[str, Any]], None]
+ContextCallback = Callable[[dict[str, Any]], None]
 
 
 _MUTATING = {
@@ -155,7 +158,7 @@ class ChatSession:
     def _rebuild_system(self) -> None:
         prompt = self.mode.prompt
         if self.mode.role == "oac":
-            prompt = f"{today_context()}\n\n{prompt}"
+            prompt = prompt.replace(CURRENT_DATE_TOKEN, today_context())
         if self.project_root:
             prompt = (
                 f"{prompt}\n\nFocused project: {self.project_root}\n"
@@ -168,6 +171,96 @@ class ChatSession:
         system: list[dict[str, Any]] = [{"role": "system", "content": prompt}]
         dialogue = [m for m in self.messages if m.get("role") != "system"]
         self.messages = system + dialogue
+
+    def context_snapshot(self, *, tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Labeled breakdown of what the model sees (for the Dev panel)."""
+        system = ""
+        for m in self.messages:
+            if m.get("role") == "system":
+                system = str(m.get("content") or "")
+                break
+
+        sections: list[dict[str, str]] = []
+        date_line = today_context() if self.mode.role == "oac" else ""
+        if date_line:
+            sections.append({"id": "date", "label": "Today's date", "text": date_line})
+        sections.append(
+            {
+                "id": "mode_rules",
+                "label": f"Mode rules ({self.mode.id})",
+                "text": (self.mode.prompt or "").strip() or "(none)",
+            }
+        )
+        if self.project_root:
+            sections.append(
+                {
+                    "id": "project",
+                    "label": "Focused project",
+                    "text": (
+                        f"{self.project_root}\n"
+                        "All paths are relative to this folder unless already under it."
+                    ),
+                }
+            )
+        if self.mode.role == "oac":
+            mem = (self.convo_memory or "").strip() or "(empty — first turn)"
+            sections.append({"id": "memory", "label": "Rolling memory", "text": mem})
+            if self.last_user_text or self.last_assistant_text or self.last_links:
+                sections.append(
+                    {
+                        "id": "previous_turn",
+                        "label": "Previous turn",
+                        "text": last_turn_block(
+                            self.last_user_text,
+                            self.last_assistant_text,
+                            self.last_links,
+                        ).strip(),
+                    }
+                )
+
+        dialogue: list[dict[str, Any]] = []
+        for m in self.messages:
+            role = str(m.get("role") or "")
+            if role == "system":
+                continue
+            entry: dict[str, Any] = {
+                "role": role,
+                "content": str(m.get("content") or ""),
+            }
+            tcalls = m.get("tool_calls")
+            if tcalls:
+                names: list[str] = []
+                for tc in tcalls:
+                    if not isinstance(tc, dict):
+                        continue
+                    fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                    n = str((fn or {}).get("name") or "")
+                    if n:
+                        names.append(n)
+                if names:
+                    entry["tool_calls"] = names
+            dialogue.append(entry)
+
+        tool_names: list[str] = []
+        if tools:
+            for t in tools:
+                if not isinstance(t, dict):
+                    continue
+                fn = t.get("function") if isinstance(t.get("function"), dict) else {}
+                n = str((fn or {}).get("name") or "")
+                if n:
+                    tool_names.append(n)
+
+        return {
+            "mode": self.mode.id,
+            "session_id": self.session_id,
+            "project_root": self.project_root,
+            "sections": sections,
+            "system_chars": len(system),
+            "system": system,
+            "dialogue": dialogue,
+            "tools": tool_names,
+        }
 
     def reset(self) -> None:
         self.messages = []
@@ -221,16 +314,46 @@ class ChatSession:
         on_token: TokenCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
         on_tool: ToolCallback | None = None,
+        on_wait: WaitCallback | None = None,
+        on_context: ContextCallback | None = None,
     ) -> str:
+        # A prior Stop/abort can leave cancel set. A new user turn must start clean
+        # or the first message after reload is immediately "(stopped)".
+        self.clear_cancel()
         # OAC + SOI share one Ollama — never overlap inference (UI lockups / hung streams).
-        with INFERENCE_GATE:
+        holder = "soi" if self.mode.role == "soi" else "chat"
+        waited = 0.0
+        ticket = 0
+        while True:
+            if self.cancelled():
+                raise OllamaCancelled("Cancelled")
+            ticket = INFERENCE_GATE.acquire(timeout=1.0, holder=holder)
+            if ticket:
+                break
+            waited += 1.0
+            if on_wait is not None:
+                try:
+                    on_wait(dict(INFERENCE_GATE.snapshot()))
+                except Exception:
+                    pass
+            if waited >= 180:
+                snap = INFERENCE_GATE.snapshot()
+                who = snap.get("holder") or "another job"
+                raise OllamaError(
+                    f"Ollama is busy ({who} for {snap.get('held_s')}s). "
+                    "Press Reset AI, or Stop SOI if filing is running."
+                )
+        try:
             return self._ask_locked(
                 user_text,
                 stream=stream,
                 on_token=on_token,
                 on_thinking=on_thinking,
                 on_tool=on_tool,
+                on_context=on_context,
             )
+        finally:
+            INFERENCE_GATE.release(ticket)
 
     def _ask_locked(
         self,
@@ -240,14 +363,15 @@ class ChatSession:
         on_token: TokenCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
         on_tool: ToolCallback | None = None,
+        on_context: ContextCallback | None = None,
     ) -> str:
         self.touch()
         route_note = self._maybe_autoroute(user_text)
         if route_note and on_token is not None:
             on_token(f"{route_note}\n")
 
-        self.clear_cancel()
         self.messages.append({"role": "user", "content": user_text})
+        self._turn_user_text = user_text
         self._trim_history()
 
         if self.mode.role == "oac":
@@ -258,6 +382,11 @@ class ChatSession:
                 return opened
 
         tools = self._active_tools()
+        if on_context is not None:
+            try:
+                on_context(self.context_snapshot(tools=tools))
+            except Exception:
+                pass
         final_text = ""
         streamed_any = False
         streamed_parts: list[str] = []
@@ -437,6 +566,42 @@ class ChatSession:
                                 "path": result.get("path"),
                                 "title": result.get("title"),
                             }
+                        if name == "image_search" and isinstance(result, dict) and result.get("ok"):
+                            imgs = result.get("results")
+                            if isinstance(imgs, list):
+                                slim: list[dict[str, str]] = []
+                                for item in imgs[:8]:
+                                    if not isinstance(item, dict):
+                                        continue
+                                    slim.append(
+                                        {
+                                            "title": str(item.get("title") or "")[:120],
+                                            "url": str(item.get("url") or ""),
+                                            "page_url": str(item.get("page_url") or ""),
+                                            "image_url": str(item.get("image_url") or ""),
+                                            "thumbnail": str(item.get("thumbnail") or ""),
+                                            "source": str(item.get("source") or ""),
+                                        }
+                                    )
+                                done_detail["images"] = slim
+                        if name == "web_search" and isinstance(result, dict) and result.get("ok"):
+                            opened = result.get("auto_opened")
+                            if isinstance(opened, list) and opened:
+                                cards: list[dict[str, str]] = []
+                                for item in opened[:3]:
+                                    if not isinstance(item, dict):
+                                        continue
+                                    cards.append(
+                                        {
+                                            "title": str(item.get("title") or "")[:120],
+                                            "url": str(item.get("url") or ""),
+                                            "snippet": str(item.get("snippet") or "")[:220],
+                                            "thumbnail": str(item.get("thumbnail") or ""),
+                                            "source": str(item.get("source") or ""),
+                                        }
+                                    )
+                                if cards:
+                                    done_detail["articles"] = cards
                         on_tool("done", name, done_detail)
                     payload = self._truncate_tool_result(name, result)
                     self.messages.append(
@@ -569,6 +734,15 @@ class ChatSession:
             opened = result.get("auto_opened")
             if isinstance(opened, list) and opened:
                 base += f" · opened {len(opened)}"
+            return base
+        if name == "image_search":
+            n = result.get("count")
+            if n is None and isinstance(result.get("results"), list):
+                n = len(result["results"])
+            base = f"{n} photos" if n is not None else "ok"
+            opened = result.get("auto_opened")
+            if isinstance(opened, list) and opened:
+                base += " · Google Images"
             return base
         if name == "web_fetch":
             text = result.get("text") or ""
@@ -711,7 +885,18 @@ class ChatSession:
             if not url.startswith(("http://", "https://")):
                 continue
             title = str(item.get("title") or "").strip()
-            rows.append({"title": title, "url": url})
+            snippet = str(item.get("snippet") or "").strip()
+            thumb = str(item.get("thumbnail") or "").strip()
+            source = str(item.get("source") or "").strip()
+            rows.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet,
+                    "thumbnail": thumb,
+                    "source": source,
+                }
+            )
         if not rows:
             return []
 
@@ -728,6 +913,38 @@ class ChatSession:
             if yt:
                 return yt[:limit]
         return rows[:limit]
+
+    @staticmethod
+    def _enrich_article_cards(picks: list[dict[str, str]]) -> list[dict[str, str]]:
+        """Attach preview images to auto-opened search hits."""
+        from ainet.tools.web import article_preview_images
+
+        missing = [
+            str(p.get("url") or "")
+            for p in picks
+            if not str(p.get("thumbnail") or "").startswith(("http://", "https://"))
+        ]
+        extras = article_preview_images(missing) if missing else {}
+        cards: list[dict[str, str]] = []
+        for pick in picks:
+            url = str(pick.get("url") or "")
+            thumb = str(pick.get("thumbnail") or extras.get(url) or "")
+            if not thumb.startswith(("http://", "https://")):
+                thumb = ""
+            source = str(pick.get("source") or "")
+            if not source and url:
+                host = urllib.parse.urlparse(url).netloc.lower()
+                source = host[4:] if host.startswith("www.") else host
+            cards.append(
+                {
+                    "title": str(pick.get("title") or "")[:120],
+                    "url": url,
+                    "snippet": str(pick.get("snippet") or "")[:220],
+                    "thumbnail": thumb,
+                    "source": source,
+                }
+            )
+        return cards
 
     def _auto_open_from_search(
         self,
@@ -782,6 +999,7 @@ class ChatSession:
             seen_tool_keys.add(self._tool_call_key("open_chrome", {"url": url, "new_tab": True}))
             seen_tool_keys.add(self._tool_call_key("open_chrome", {"url": url}))
         self.last_tool_names.append("open_chrome")
+        cards = self._enrich_article_cards(fresh)
         if on_tool:
             summary = err
             if not summary:
@@ -796,11 +1014,10 @@ class ChatSession:
         if not ok:
             return search_result
 
-        opened = [{"title": p.get("title") or "", "url": p["url"]} for p in fresh]
         out = dict(search_result)
-        out["auto_opened"] = opened
+        out["auto_opened"] = cards
         out["hint"] = (
-            f"Host already opened {len(opened)} URL(s) in Chrome (see auto_opened). "
+            f"Host already opened {len(cards)} URL(s) in Chrome (see auto_opened). "
             "Do not claim other tabs opened unless you call open_chrome."
         )
         return out
@@ -1020,6 +1237,8 @@ class ChatSession:
                 limit = max(limit, 9000)
             elif name == "web_search":
                 limit = max(limit, 4000)
+            elif name == "image_search":
+                limit = max(limit, 5000)
         if len(raw) <= limit:
             return result
         return {
@@ -1102,6 +1321,12 @@ class ChatSession:
             args = self._scope_tool_args(name, args)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+
+        if name == "image_search" and self._user_opts_out_of_open(
+            getattr(self, "_turn_user_text", "") or ""
+        ):
+            args = dict(args)
+            args["open_google"] = False
 
         if self.mode.role == "soi" and name in {"create_cop", "create_folder"}:
             path = str(args.get("path") or args.get("folder_path") or "")
@@ -1202,6 +1427,7 @@ class ChatSession:
         if name in PROJECT_SESSION_TOOLS | {
             "web_search",
             "web_fetch",
+            "image_search",
             "open_chrome",
             "get_tools",
             "getTools",

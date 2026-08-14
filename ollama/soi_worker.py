@@ -118,6 +118,20 @@ class SOIWorker:
     def cancelled(self) -> bool:
         return self.cancel_event.is_set()
 
+    def interrupt(self) -> None:
+        """Unblock an in-flight SOI model call (Stop / Reset AI)."""
+        self.cancel_event.set()
+        try:
+            self.client.cancel_active()
+        except Exception:
+            pass
+        active = self._active_session
+        if active is not None:
+            try:
+                active.request_cancel()
+            except Exception:
+                pass
+
     # ---- pending queues ----------------------------------------------------
 
     def pending_changelog(self) -> list[dict[str, Any]]:
@@ -823,7 +837,8 @@ class SOIWorker:
                 )
 
         phase = payload.get("phase") or "soi"
-        stream = bool(self.config.soi_think)
+        # Always stream so Stop/Reset can interrupt; soi_think still controls /think.
+        stream = True
         self.log.log(
             "model_ask",
             phase=phase,

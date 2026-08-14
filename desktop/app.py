@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import socket
+import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -27,6 +29,38 @@ def _port_open(port: int, host: str = "127.0.0.1") -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.4)
         return sock.connect_ex((host, port)) == 0
+
+
+def _http_ok(url: str, timeout: float = 1.2) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return 200 <= int(resp.status) < 500
+    except Exception:
+        return False
+
+
+def _kill_listeners(port: int) -> None:
+    """Drop a wedged listener so we can bind again (Windows)."""
+    if sys.platform != "win32":
+        return
+    try:
+        subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                (
+                    f"$p = Get-NetTCPConnection -LocalPort {int(port)} -State Listen "
+                    "-ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; "
+                    "if ($p) { $p | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } }"
+                ),
+            ],
+            capture_output=True,
+            timeout=15,
+        )
+    except Exception:
+        pass
+    time.sleep(0.5)
 
 
 def _start_shell_server(port: int, ensure_backends: bool) -> ThreadingHTTPServer:
@@ -78,16 +112,25 @@ def main(argv: list[str] | None = None) -> int:
 
     os.environ["AINET_OLLAMA_MODEL"] = "qwen3:8b"
 
+    url = f"http://127.0.0.1:{args.port}/"
     if _port_open(args.port):
-        print(f"Shell already running on :{args.port}", flush=True)
-        httpd = None
+        if _http_ok(url):
+            print(f"Shell already running on :{args.port}", flush=True)
+            httpd = None
+        else:
+            print(
+                f"Shell on :{args.port} is not responding — restarting it.",
+                flush=True,
+            )
+            _kill_listeners(args.port)
+            httpd = _start_shell_server(args.port, ensure_backends=not args.no_backends)
+            time.sleep(0.8)
+            print(f"AINet desktop shell  {url}", flush=True)
     else:
         httpd = _start_shell_server(args.port, ensure_backends=not args.no_backends)
         # Give backends a moment before the UI iframe hits them
         time.sleep(0.8)
-        print(f"AINet desktop shell  http://127.0.0.1:{args.port}/", flush=True)
-
-    url = f"http://127.0.0.1:{args.port}/"
+        print(f"AINet desktop shell  {url}", flush=True)
     try:
         if args.browser_only:
             webbrowser.open(url)

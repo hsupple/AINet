@@ -31,15 +31,37 @@ class OllamaClient:
         self._active_lock = threading.Lock()
 
     def cancel_active(self) -> None:
-        """Close any in-flight Ollama HTTP stream so a blocked read can unblock."""
+        """Close any in-flight Ollama HTTP stream so a blocked read can unblock.
+
+        Close on a daemon thread — urllib close() from the HTTP handler thread
+        can deadlock with a blocked readline() on Windows.
+        """
         with self._active_lock:
             resp = self._active_resp
+            self._active_resp = None
         if resp is None:
             return
-        try:
-            resp.close()
-        except Exception:
-            pass
+
+        def _close() -> None:
+            try:
+                fp = getattr(resp, "fp", None)
+                raw = getattr(fp, "raw", None) if fp is not None else None
+                sock = getattr(raw, "_sock", None) if raw is not None else None
+                if sock is None and fp is not None:
+                    sock = getattr(fp, "_sock", None)
+                if sock is not None:
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            try:
+                resp.close()
+            except Exception:
+                pass
+
+        threading.Thread(target=_close, name="ollama-cancel", daemon=True).start()
 
     def chat(
         self,

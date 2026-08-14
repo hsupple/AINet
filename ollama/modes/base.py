@@ -12,6 +12,7 @@ READ_TOOLS = (
     "read_json",
     "web_search",
     "web_fetch",
+    "image_search",
     "open_chrome",
     "list_projects",
 )
