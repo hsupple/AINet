@@ -9,7 +9,7 @@ from typing import Any
 
 from ainet.tools.ops import DatabaseTools
 from ainet.tools.registry import catalog_tools, dispatch, tools_subset
-from ollama.client import OllamaClient, ThinkingCallback, TokenCallback
+from ollama.client import OllamaClient, OllamaError, ThinkingCallback, TokenCallback
 from ollama.content_filing import cop_name_in_text
 from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
@@ -49,6 +49,11 @@ class ChatSession:
         resume_session: bool = True,
     ) -> None:
         self.config = config or OllamaConfig.from_env()
+        if self.config.remote_url:
+            raise OllamaError(
+                f"Mac AI uses {self.config.remote_url}; local chat is disabled. "
+                "Set AINET_REMOTE_URL=local to run a local model."
+            )
         self.client = client or OllamaClient(self.config)
         self.db = DatabaseTools(self.config.db_root)
         self.mode = mode

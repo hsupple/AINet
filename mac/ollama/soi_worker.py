@@ -71,6 +71,11 @@ class SOIWorker:
         logger: SOILogger | None = None,
     ) -> None:
         self.config = config or OllamaConfig.from_env()
+        if self.config.remote_url:
+            raise OllamaError(
+                f"Mac AI uses {self.config.remote_url}; local SOI is disabled. "
+                "Set AINET_REMOTE_URL=local to run a local model."
+            )
         self.client = client or OllamaClient(self.config)
         self.db = DatabaseTools(self.config.db_root)
         changelog.ensure_changelog_file(Path(self.config.db_root))

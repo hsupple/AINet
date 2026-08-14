@@ -21,6 +21,7 @@ from ollama.client import OllamaError
 from ollama.config import OllamaConfig
 from ollama.idle import IdleSOIWatcher
 from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
+from ollama.remote import RemoteAinetClient, RemoteError
 from ollama.session import ChatSession
 from ollama.tts import SpeechPipeline, TtsClient, TtsConfig
 
@@ -276,7 +277,7 @@ def make_handler(app: ChatApp):
         def _cors(self) -> None:
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, CF-Access-Client-Id, CF-Access-Client-Secret")
 
         def _send(self, status: int, body: bytes, content_type: str) -> None:
             self.send_response(status)
@@ -414,6 +415,108 @@ def make_handler(app: ChatApp):
     return Handler
 
 
+def make_remote_handler(config: OllamaConfig):
+    """Serve the local UI and proxy every /api/* call to the Windows tunnel."""
+    remote = RemoteAinetClient(config)
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "AINetWeb/1.0"
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            sys_stderr = __import__("sys").stderr
+            print(f"{self.address_string()} {fmt % args}", file=sys_stderr, flush=True)
+
+        def _cors(self) -> None:
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, CF-Access-Client-Id, CF-Access-Client-Secret")
+
+        def _send(self, status: int, body: bytes, content_type: str) -> None:
+            self.send_response(status)
+            self._cors()
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            self.send_response(204)
+            self._cors()
+            self.end_headers()
+
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path in {"/", "/index.html"}:
+                html = (_STATIC / "index.html").read_bytes()
+                self._send(200, html, "text/html; charset=utf-8")
+                return
+            if path in {"/favicon.ico", "/favicon.svg"}:
+                icon = _STATIC / "favicon.svg"
+                if icon.is_file():
+                    self._send(200, icon.read_bytes(), "image/svg+xml")
+                    return
+            if path.startswith("/api/"):
+                self._proxy("GET", parsed.path + (("?" + parsed.query) if parsed.query else ""), None)
+                return
+            self._send(404, b'{"ok":false,"error":"not found"}', "application/json")
+
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            if not parsed.path.startswith("/api/"):
+                self._send(404, b'{"ok":false,"error":"not found"}', "application/json")
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            qs = parsed.path + (("?" + parsed.query) if parsed.query else "")
+            self._proxy("POST", qs, raw)
+
+        def _proxy(self, method: str, path_qs: str, body: bytes | None) -> None:
+            stream = path_qs.startswith("/api/chat-stream") or path_qs.startswith("/api/soi-stream")
+            try:
+                resp = remote.open_raw(
+                    method,
+                    path_qs,
+                    body,
+                    timeout_s=None if stream else config.timeout_s,
+                )
+            except RemoteError as exc:
+                payload = json.dumps({"ok": False, "error": str(exc)}).encode("utf-8")
+                self._send(502, payload, "application/json; charset=utf-8")
+                return
+            try:
+                ctype = str(resp.headers.get("Content-Type") or "application/json")
+                if "text/event-stream" in ctype or stream:
+                    self.send_response(200)
+                    self._cors()
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.send_header("X-Accel-Buffering", "no")
+                    self.end_headers()
+                    try:
+                        while True:
+                            chunk = resp.read(4096)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                        return
+                    return
+                data = resp.read()
+                status = int(getattr(resp, "status", None) or getattr(resp, "code", 200))
+                self._send(status, data, ctype)
+            finally:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+
+    return Handler
+
+
 def serve(
     host: str = "0.0.0.0",
     port: int = 1111,
@@ -421,6 +524,22 @@ def serve(
     mode_id: str = DEFAULT_MODE_ID,
 ) -> None:
     config = config or OllamaConfig.from_env()
+    if config.remote_url:
+        handler = make_remote_handler(config)
+        httpd = ThreadingHTTPServer((host, port), handler)
+        print(
+            f"AINet web  http://{host}:{port}/  "
+            f"(LAN: use this machine's IP, e.g. http://192.168.x.x:{port}/)\n"
+            f"remote={config.remote_url}  (all AI via Windows tunnel; no local Ollama)",
+            flush=True,
+        )
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nShutting down…", flush=True)
+        finally:
+            httpd.server_close()
+        return
     app = ChatApp(config, mode_id=mode_id)
     handler = make_handler(app)
     httpd = ThreadingHTTPServer((host, port), handler)

@@ -103,6 +103,8 @@ class ChatApp:
         }
 
     def status(self) -> dict[str, Any]:
+        import os
+
         with self.lock:
             base = {
                 "ok": True,
@@ -118,6 +120,8 @@ class ChatApp:
                 ),
                 "session_id": self.session.session_id,
                 "db_root": str(self.config.db_root),
+                "public_url": (os.environ.get("AINET_PUBLIC_URL") or "").strip().rstrip("/")
+                or None,
                 "soi_enabled": self.config.soi_enabled,
                 "soi_idle_seconds": self.config.soi_idle_seconds,
                 "soi_running": self.watcher.running,
@@ -424,7 +428,7 @@ def make_handler(app: ChatApp):
         def _cors(self) -> None:
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, CF-Access-Client-Id, CF-Access-Client-Secret")
 
         def _send(self, status: int, body: bytes, content_type: str) -> None:
             self.send_response(status)
@@ -614,10 +618,13 @@ def serve(
     config: OllamaConfig | None = None,
     mode_id: str = DEFAULT_MODE_ID,
 ) -> None:
+    import os
+
     config = config or OllamaConfig.from_env()
     app = ChatApp(config, mode_id=mode_id)
     handler = make_handler(app)
     httpd = ThreadingHTTPServer((host, port), handler)
+    public = (os.environ.get("AINET_PUBLIC_URL") or "").strip().rstrip("/")
     print(
         f"AINet web  http://{host}:{port}/  "
         f"(LAN: use this machine's IP, e.g. http://192.168.x.x:{port}/)\n"
@@ -625,6 +632,14 @@ def serve(
         f"soi_file={config.soi_idle_seconds:.0f}s",
         flush=True,
     )
+    if public:
+        print(f"Cloudflare public URL: {public}/  (same API as local)", flush=True)
+    else:
+        print(
+            "Cloudflare: set Public Hostname → http://127.0.0.1:1111 "
+            "(optional AINET_PUBLIC_URL=https://… for status)",
+            flush=True,
+        )
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

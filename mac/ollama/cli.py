@@ -24,6 +24,7 @@ from ollama.config import OllamaConfig
 from ollama.idle import IdleSOIWatcher
 from ollama.soi_log import status_line
 from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
+from ollama.remote import RemoteAinetClient, RemoteError
 from ollama.router import suggest_mode
 from ollama.session import ChatSession
 from ollama.soi_worker import SOIWorker
@@ -131,12 +132,98 @@ def _chat_turn(session: ChatSession, config: OllamaConfig, line: str, *, voice: 
     return reply
 
 
+def _remote_chat_turn(client: RemoteAinetClient, line: str) -> str:
+    reply_parts: list[str] = []
+    try:
+        for event in client.chat_stream(line):
+            et = str(event.get("type") or "")
+            if et == "token":
+                delta = str(event.get("text") or "")
+                if delta:
+                    sys.stdout.write(delta)
+                    sys.stdout.flush()
+                    reply_parts.append(delta)
+            elif et == "error":
+                raise RemoteError(str(event.get("error") or "remote chat error"))
+            elif et == "done":
+                blob = str(event.get("reply") or "")
+                if blob and not reply_parts:
+                    sys.stdout.write(blob)
+                    sys.stdout.flush()
+                    reply_parts.append(blob)
+    finally:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    return "".join(reply_parts)
+
+
+def _run_remote_chat(client: RemoteAinetClient, args: argparse.Namespace) -> int:
+    if args.message is not None:
+        try:
+            _remote_chat_turn(client, args.message)
+        except RemoteError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    try:
+        status = client.status()
+    except RemoteError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"AINet OAC  remote={client.base}  "
+        f"model={status.get('model') or ''}  mode={status.get('mode') or ''}  "
+        f"session={status.get('session_id') or ''}"
+    )
+    print("Commands: /exit  /reset  /mode <id>  /soi")
+    while True:
+        try:
+            line = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not line:
+            continue
+        if line in {"/exit", "/quit"}:
+            break
+        try:
+            if line == "/reset":
+                client.reset()
+                print("(new OAC session on Windows host)")
+                continue
+            if line == "/soi":
+                print(json.dumps(client.run_soi(), indent=2, ensure_ascii=False))
+                continue
+            if line.startswith("/mode "):
+                payload = client.set_mode(line.split(None, 1)[1].strip())
+                if not payload.get("ok"):
+                    print(payload.get("error") or payload)
+                    continue
+                print(f"(mode={payload.get('mode')})")
+                continue
+            _remote_chat_turn(client, line)
+        except RemoteError as exc:
+            print(f"error: {exc}")
+            continue
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     _configure_stdio()
     parser = argparse.ArgumentParser(prog="ollama-ainet", description="AINet OAC/SOI runtime")
-    parser.add_argument("--host", default=None, help="Ollama base URL")
+    parser.add_argument("--host", default=None, help="Ollama base URL (local mode only)")
     parser.add_argument("--model", default=None, help="Model name")
     parser.add_argument("--db", type=Path, default=None, help="Database root")
+    parser.add_argument(
+        "--remote",
+        default=None,
+        help="Windows AINet URL (default https://pathroom.org). Empty/local disables.",
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Use local Ollama instead of the Windows tunnel",
+    )
     parser.add_argument(
         "--oac-think",
         dest="oac_think",
@@ -233,6 +320,11 @@ def main(argv: list[str] | None = None) -> int:
         updates["model"] = args.model
     if args.db:
         updates["db_root"] = args.db
+    if getattr(args, "local", False):
+        updates["remote_url"] = ""
+    elif getattr(args, "remote", None) is not None:
+        raw = str(args.remote).strip().rstrip("/")
+        updates["remote_url"] = "" if raw.lower() in {"", "0", "false", "off", "local", "none"} else raw
     if getattr(args, "oac_think", None) is not None:
         updates["oac_think"] = args.oac_think
     if getattr(args, "soi_think", None) is not None:
@@ -278,6 +370,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "ping":
+        if config.remote_url:
+            client = RemoteAinetClient(config)
+            try:
+                status = client.status()
+            except RemoteError as exc:
+                print(json.dumps({"ok": False, "error": str(exc)}))
+                return 1
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "remote": client.base,
+                        "model": status.get("model"),
+                        "mode": status.get("mode"),
+                        "session_id": status.get("session_id"),
+                    },
+                    indent=2,
+                )
+            )
+            return 0
         client = OllamaClient(config)
         try:
             models = client.list_models()
@@ -312,6 +424,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "soi-status":
+        if config.remote_url:
+            client = RemoteAinetClient(config)
+            try:
+                print(json.dumps(client.status(), indent=2, ensure_ascii=False))
+            except RemoteError as exc:
+                print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+                return 1
+            return 0
         worker = SOIWorker(config)
         state = None
         if worker.state_path.exists():
@@ -339,6 +459,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "soi-run":
+        if config.remote_url:
+            client = RemoteAinetClient(config)
+            try:
+                result = client.run_soi()
+            except RemoteError as exc:
+                print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+                return 1
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            return 0 if result.get("ok") else 1
         worker = SOIWorker(config)
         phase = getattr(args, "phase", "auto")
         if phase == "filing":
@@ -356,6 +485,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.get("ok") else 1
 
     if args.command == "chat":
+        if config.remote_url:
+            return _run_remote_chat(RemoteAinetClient(config), args)
         try:
             mode = get_mode(args.mode)
         except KeyError as exc:

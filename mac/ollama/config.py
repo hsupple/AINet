@@ -1,4 +1,4 @@
-"""Runtime configuration for the local Ollama server (Mac)."""
+"""Runtime configuration for the Mac edition (remote Windows AINet by default)."""
 
 from __future__ import annotations
 
@@ -7,12 +7,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+DEFAULT_REMOTE_URL = "https://pathroom.org"
+
+
 def default_db_root() -> Path:
     return Path(__file__).resolve().parent.parent / "db"
 
 
+def remote_url_from_env() -> str:
+    raw = os.environ.get("AINET_REMOTE_URL", DEFAULT_REMOTE_URL).strip().rstrip("/")
+    if raw.lower() in {"", "0", "false", "off", "local", "none"}:
+        return ""
+    return raw
+
+
 @dataclass(frozen=True)
 class OllamaConfig:
+    # When set, all AI (chat/SOI/status) goes through the Windows tunnel, not local Ollama.
+    remote_url: str = DEFAULT_REMOTE_URL
+    cf_access_client_id: str = ""
+    cf_access_client_secret: str = ""
     host: str = "http://127.0.0.1:11434"
     model: str = "qwen3:8b"
     # Qwen3 thinking: always off by default (OAC + SOI)
@@ -46,6 +60,17 @@ class OllamaConfig:
     def from_env(cls) -> OllamaConfig:
         db = os.environ.get("AINET_DB")
         return cls(
+            remote_url=remote_url_from_env(),
+            cf_access_client_id=(
+                os.environ.get("AINET_CF_ACCESS_CLIENT_ID")
+                or os.environ.get("CF_ACCESS_CLIENT_ID")
+                or ""
+            ).strip(),
+            cf_access_client_secret=(
+                os.environ.get("AINET_CF_ACCESS_CLIENT_SECRET")
+                or os.environ.get("CF_ACCESS_CLIENT_SECRET")
+                or ""
+            ).strip(),
             host=os.environ.get("AINET_OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/"),
             model=os.environ.get("AINET_OLLAMA_MODEL", "qwen3:8b"),
             oac_think=os.environ.get("AINET_OAC_THINK", "0") not in {"0", "false", "False"},

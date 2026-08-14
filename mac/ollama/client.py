@@ -89,6 +89,11 @@ class OllamaClient:
         if tools:
             payload["tools"] = tools
 
+        if self.config.remote_url:
+            raise OllamaError(
+                f"Mac AI uses {self.config.remote_url}, not local Ollama. "
+                "Set AINET_REMOTE_URL=local only if you intend to run a local model."
+            )
         url = f"{self.config.host}/api/chat"
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -207,6 +212,11 @@ class OllamaClient:
         return {"message": message, "done": True, **meta}
 
     def list_models(self) -> list[str]:
+        if self.config.remote_url:
+            raise OllamaError(
+                f"Mac AI uses {self.config.remote_url}, not local Ollama. "
+                "Set AINET_REMOTE_URL=local only if you intend to run a local model."
+            )
         url = f"{self.config.host}/api/tags"
         req = urllib.request.Request(url, method="GET")
         try:
