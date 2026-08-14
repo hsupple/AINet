@@ -55,8 +55,8 @@ class DatabaseTools:
         for child in sorted(target.iterdir(), key=lambda p: p.name.lower()):
             if child.name.startswith("."):
                 continue
-            # Hide host-only runtime from AI listings (SOI + OAC).
-            if child.name.casefold() == "runtime":
+            # Hide host-only runtime / chats from AI listings (SOI + OAC).
+            if child.name.casefold() in {"runtime", "chats"}:
                 continue
             children.append(
                 {
@@ -88,7 +88,7 @@ class DatabaseTools:
             for child in sorted(node.iterdir(), key=lambda p: p.name.lower()):
                 if child.name.startswith("."):
                     continue
-                if child.name.casefold() == "runtime":
+                if child.name.casefold() in {"runtime", "chats"}:
                     continue
                 if child.is_dir():
                     kids.append(walk(child, depth + 1))
@@ -605,7 +605,7 @@ class DatabaseTools:
         root = self.paths.root
         stale: list[str] = []
         for path in sorted(root.rglob("Read.json")):
-            if "runtime" in path.parts:
+            if "runtime" in path.parts or "Chats" in path.parts:
                 continue
             try:
                 rel = path.relative_to(root).as_posix()

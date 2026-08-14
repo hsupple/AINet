@@ -8,10 +8,7 @@ from typing import Any
 
 from ainet.tools import changelog
 from ainet.tools.ops import DatabaseTools
-from ollama.content_filing import (
-    content_kind,
-    cop_name_in_text,
-)
+from ollama.content_filing import cop_name_in_text
 from ollama.topics import record_personal_filing
 
 
@@ -24,15 +21,6 @@ def _entry_text(entry: dict[str, Any]) -> tuple[str, str]:
     user = str(details.get("user_text") or entry.get("summary") or "").strip()
     assistant = str(details.get("assistant_text") or "").strip()
     return user, assistant
-
-
-_NAMED_DEST_KINDS = {
-    "identity": {"identity", "voice", "psychology"},
-    "personality": {"identity", "voice"},
-    "voice": {"voice", "identity"},
-    "psychology": {"psychology", "identity"},
-    "habits": {"habits"},
-}
 
 
 def _qualify_dest(dest: str) -> str:
@@ -114,8 +102,7 @@ def file_by_id(
 
     dest_norm = dest_raw.lower().strip()
     first = changelog.get_entry(db.paths, ids[0])
-    user0, asst0 = _entry_text(first or {})
-    kind0 = content_kind(user0, asst0)
+    user0, _asst0 = _entry_text(first or {})
     if dest_norm in {"research", "session"} or dest_raw.replace("\\", "/").startswith(
         "Hayden/Research"
     ):
@@ -165,33 +152,10 @@ def file_by_id(
 
     path = _qualify_dest(dest_raw)
     path_norm = path.replace("\\", "/")
-    if path_norm.startswith("Hayden/Identity") and kind0 not in {"identity", "voice"}:
-        return {
-            "ok": False,
-            "error": (
-                f"{path_norm} refused — this turn is {kind0}, not identity. "
-                "Inspect domain_snapshot and file in the matching Folderrules domain."
-            ),
-            "entry_ids": ids,
-        }
     if path_norm.startswith("Hayden/Research"):
         return {
             "ok": False,
             "error": "Research is removed. Use a Folderrules leaf under School/, Work/, Household/, or Hayden/.",
-            "entry_ids": ids,
-        }
-    if path_norm.startswith(("School/", "Work/", "Household/")) and kind0 in {
-        "psychology",
-        "identity",
-        "voice",
-        "habits",
-    }:
-        return {
-            "ok": False,
-            "error": (
-                f"{path_norm} refused — this turn is {kind0}. "
-                "file_by_id dest=psychology|identity|habits|voice, not a School/Work COP."
-            ),
             "entry_ids": ids,
         }
     if ("/Courses/" in path_norm or "/Projects/" in path_norm) and not cop_name_in_text(

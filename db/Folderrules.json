@@ -68,16 +68,20 @@
     ],
     "nested_under_project": true,
     "nested_under_hayden": true,
-    "notes": "Under Hayden/ the AI may create any depth of personal folders/files. New user projects MUST use create_project (Projects/<Name>/ with Read/History/Notes/Plan/Profile) — never a bare create_folder. Under Work/Projects/<Project>/ and inside a focused Projects/<Name>/ the AI may add subfolders and text files. Deep Research briefs live in db/runtime/research/ (host-only; inspect_research only)."
+    "notes": "Under Hayden/ the AI may create any depth of personal folders/files. New user projects MUST use create_project (Projects/<Name>/ with Read/History/Notes/Plan/Profile) — never a bare create_folder. Under Work/Projects/<Project>/ and inside a focused Projects/<Name>/ the AI may add subfolders and text files. Deep Research briefs live in db/runtime/research/ (host-only; inspect_research only). Chat logs live in db/Chats/ (host-only)."
   },
   "hayden_map": {
     "Identity": "Core self, sides, personality, voice, boundaries",
     "Values": "Principles and ranked priorities",
     "Preferences": "Likes, dislikes, tastes (Music, Food, Media, …)",
     "Habits": "Routines, patterns, vices, disciplines",
-    "Desires": "Goals, wants, longings",
+    "Desires": "Wants, goals, and longings that are not yet a plan",
+    "Planner": "Near-term schedule, to-dos, this-week actions",
+    "Plans": "Longer-horizon multi-step intentions (graduation, career)",
+    "Projects": "Informal personal-project notes — not a named Projects/<Name> COP",
+    "History": "Everyday past events that are not Memories",
     "Relationships": "People index + People/<Name>.json dossiers",
-    "Secrets": "Private vault — know deeply, speak carefully",
+    "Secrets": "Private vault — passwords, PII, anything marked sensitive",
     "Memories": "Autobiography by category, including Milestones for the most important turning points",
     "Body": "Health, energy, sensory",
     "Psychology": "Triggers, coping, fears, attachment, defenses",

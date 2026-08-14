@@ -156,10 +156,10 @@ class Permissions:
         top = parts[0]
         key = rel.casefold()
 
-        # Host-only vault (Deep Research briefs, OAC/SOI runtime). AI must use inspect_research.
-        if top.casefold() == "runtime":
+        # Host-only vault (Deep Research briefs, OAC/SOI runtime, chat logs).
+        if top.casefold() in {"runtime", "chats"}:
             raise PermissionError_(
-                "runtime/ is host-only. Use inspect_research to read Deep Research briefs."
+                "runtime/ and Chats/ are host-only. Use inspect_research to read Deep Research briefs."
             )
 
         if key in PROTECTED_READ_ONLY:

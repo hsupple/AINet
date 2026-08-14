@@ -62,7 +62,7 @@ def should_skip_stale_mark(path: str) -> bool:
     parts = PurePosixPath(norm).parts
     if not parts:
         return True
-    if parts[0].casefold() == "runtime":
+    if parts[0].casefold() in {"runtime", "chats"}:
         return True
     name = parts[-1].casefold()
     if name in SKIP_STALE_BASENAMES:
@@ -363,7 +363,7 @@ def migrate_all_reads(db_root: Path | str) -> list[str]:
     root = Path(db_root)
     updated: list[str] = []
     for path in sorted(root.rglob("Read.json")):
-        if "runtime" in path.parts:
+        if "runtime" in path.parts or "Chats" in path.parts:
             continue
         if migrate_read_file(path):
             try:

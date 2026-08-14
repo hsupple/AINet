@@ -118,6 +118,37 @@ class ChatSession:
             self._rebuild_system()
         self.cancel_event = threading.Event()
 
+    def open_stored_session(self, session_id: str) -> dict[str, Any]:
+        """Switch to a logged chat. UI gets full turns; the model still gets last-turn memory."""
+        if not self.store:
+            return {"ok": False, "error": "Chat log is not enabled"}
+        if not self.store.session_exists(session_id):
+            return {"ok": False, "error": "Chat not found"}
+        payload = self.store.session_payload(session_id)
+        self.session_id = str(payload.get("id") or session_id)
+        self.store.set_current(self.session_id)
+        self.convo_memory = str(payload.get("memory") or "")
+        turns = payload.get("turns") if isinstance(payload.get("turns"), list) else []
+        last = turns[-1] if turns else {}
+        self.last_user_text = str(last.get("user") or "") if isinstance(last, dict) else ""
+        self.last_assistant_text = str(last.get("assistant") or "") if isinstance(last, dict) else ""
+        self.last_links = [("", u) for u in extract_http_urls(self.last_assistant_text)]
+        self.messages = []
+        self.full_tools_unlocked = False
+        self.project_root = None
+        mode_id = str(payload.get("mode_id") or "").strip()
+        if mode_id:
+            try:
+                mode = get_mode(mode_id)
+            except KeyError:
+                mode = None
+            if mode is not None and mode.role == "oac":
+                self.mode = mode
+                self.mode_locked = False
+        self._rebuild_system()
+        self.touch()
+        return {"ok": True, "chat": payload}
+
     def request_cancel(self) -> None:
         self.cancel_event.set()
         try:

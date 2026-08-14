@@ -75,6 +75,7 @@ SKELETON_DIRS = (
     "runtime/oac",
     "runtime/oac/sessions",
     "runtime/soi",
+    "Chats",
     "Hayden",
     "Hayden/Identity",
     "Hayden/Values",
@@ -427,9 +428,35 @@ def _reset_json_file(root: Path, path: Path, plan: ResetPlan, *, dry_run: bool) 
     plan.apply(dry_run, write_empty_shape, f"empty {rel}")
 
 
+def _preserve_chats(root: Path, plan: ResetPlan, *, dry_run: bool) -> None:
+    """Copy live OAC session logs into db/Chats/ so a personal-DB reset keeps them."""
+    dest = root / "Chats"
+    if not dest.exists():
+        plan.apply(dry_run, lambda: dest.mkdir(parents=True, exist_ok=True), "mkdir Chats")
+    src = root / "runtime" / "oac" / "sessions"
+    if src.is_dir():
+        for path in src.glob("*.json"):
+            target = dest / path.name
+            if target.exists():
+                continue
+            plan.apply(
+                dry_run,
+                lambda p=path, t=target: shutil.copy2(p, t),
+                f"keep chat {path.name}",
+            )
+    current = root / "runtime" / "oac" / "current.json"
+    dest_current = dest / "current.json"
+    if current.is_file() and not dest_current.exists():
+        plan.apply(
+            dry_run,
+            lambda: shutil.copy2(current, dest_current),
+            "keep Chats/current.json",
+        )
+
+
 def _reset_content(root: Path, plan: ResetPlan, *, dry_run: bool) -> None:
     for path in sorted(root.rglob("*.json")):
-        if "runtime" in path.parts:
+        if "runtime" in path.parts or "Chats" in path.parts:
             continue
         if plan.is_removed(_rel(root, path)):
             continue
@@ -464,6 +491,7 @@ def reset_db(
     elif backup and dry_run:
         plan.log(f"backup {root.parent / ('.ainet-db-backup-' + _utc_stamp())}")
 
+    _preserve_chats(root, plan, dry_run=dry_run)
     _reset_queues(root, plan, dry_run=dry_run)
     _ensure_skeleton(root, plan, dry_run=dry_run)
     if queues_only:

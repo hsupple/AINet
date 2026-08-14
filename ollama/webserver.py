@@ -429,6 +429,33 @@ class ChatApp:
             )
             return {"ok": True, "hard": hard, **self.status()}
 
+    def list_chats(self) -> dict[str, Any]:
+        store = self.session.store
+        if store is None:
+            return {"ok": True, "chats": [], "session_id": self.session.session_id}
+        return {
+            "ok": True,
+            "chats": store.list_sessions(current_id=self.session.session_id),
+            "session_id": self.session.session_id,
+        }
+
+    def get_chat(self, session_id: str) -> dict[str, Any]:
+        store = self.session.store
+        if store is None:
+            return {"ok": False, "error": "Chat log is not enabled"}
+        try:
+            payload = store.session_payload(session_id)
+        except (OSError, ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "chat": payload}
+
+    def open_chat(self, session_id: str) -> dict[str, Any]:
+        with self.lock:
+            result = self.session.open_stored_session(session_id)
+            if not result.get("ok"):
+                return result
+            return {**result, **self.status()}
+
     def set_mode(self, mode_id: str) -> dict[str, Any]:
         with self.lock:
             mid = (mode_id or "").strip().lower().replace(" ", "_").replace("-", "_")
@@ -561,6 +588,17 @@ def make_handler(app: ChatApp):
                     return
             if path == "/api/status":
                 status, body, ctype = _json_bytes(app.status())
+                self._send(status, body, ctype)
+                return
+            if path == "/api/chats":
+                sid = (qs.get("id") or [""])[0]
+                if sid:
+                    payload = app.get_chat(str(sid))
+                    code = 200 if payload.get("ok") else 404
+                    status, body, ctype = _json_bytes(payload, code)
+                    self._send(status, body, ctype)
+                    return
+                status, body, ctype = _json_bytes(app.list_chats())
                 self._send(status, body, ctype)
                 return
             if path == "/api/spotify/status":
@@ -750,6 +788,12 @@ def make_handler(app: ChatApp):
                 status, body, ctype = _json_bytes(
                     app.reset(hard=bool(data.get("hard")))
                 )
+                self._send(status, body, ctype)
+                return
+            if path == "/api/chats/open":
+                payload = app.open_chat(str(data.get("id") or data.get("session_id") or ""))
+                code = 200 if payload.get("ok") else 404
+                status, body, ctype = _json_bytes(payload, code)
                 self._send(status, body, ctype)
                 return
             if path == "/api/mode":

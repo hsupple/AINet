@@ -48,7 +48,7 @@
     }
 
     .shell {
-      max-width: 1280px;
+      max-width: 1480px;
       height: 100%;
       margin: 0 auto;
       padding: 1rem 1rem 0.85rem;
@@ -167,26 +167,39 @@
     .workspace {
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.85fr);
+      grid-template-columns: 232px minmax(0, 1.15fr) minmax(340px, 0.85fr);
       gap: 0.75rem;
       transition: grid-template-columns 280ms cubic-bezier(0.2, 0.85, 0.2, 1);
     }
     .workspace.side-collapsed {
-      grid-template-columns: minmax(0, 1fr) 44px;
+      grid-template-columns: 232px minmax(0, 1fr) 44px;
       gap: 0.55rem;
+    }
+    .workspace.chats-collapsed {
+      grid-template-columns: 44px minmax(0, 1.15fr) minmax(340px, 0.85fr);
+    }
+    .workspace.chats-collapsed.side-collapsed {
+      grid-template-columns: 44px minmax(0, 1fr) 44px;
+    }
+    @media (max-width: 1100px) {
+      .workspace {
+        grid-template-columns: 200px minmax(0, 1fr) minmax(300px, 0.8fr);
+      }
     }
     @media (max-width: 900px) {
       .workspace {
         grid-template-columns: 1fr;
-        grid-template-rows: minmax(0, 1fr) minmax(260px, 40vh);
+        grid-template-rows: auto minmax(0, 1fr) minmax(260px, 40vh);
       }
-      .workspace.side-collapsed {
+      .workspace.side-collapsed,
+      .workspace.chats-collapsed,
+      .workspace.chats-collapsed.side-collapsed {
         grid-template-columns: 1fr;
-        grid-template-rows: minmax(0, 1fr) 44px;
+        grid-template-rows: auto minmax(0, 1fr) 44px;
       }
     }
 
-    .chat-pane, .soi-panel {
+    .chat-pane, .soi-panel, .chats-rail {
       min-height: 0;
       background: var(--bg-elev);
       border: 1px solid var(--line);
@@ -195,6 +208,107 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
+    }
+    .chats-rail {
+      min-width: 0;
+    }
+    .chats-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.4rem;
+      padding: 0.7rem 0.7rem 0.55rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .chats-head strong {
+      font-family: "Syne", sans-serif;
+      font-size: 0.92rem;
+      letter-spacing: -0.02em;
+    }
+    .chats-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+    #chats-new {
+      padding: 0.28rem 0.65rem;
+      font-size: 0.72rem;
+    }
+    .chats-list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 0.4rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.28rem;
+    }
+    .chat-item {
+      text-align: left;
+      width: 100%;
+      border-radius: 11px;
+      border: 1px solid transparent;
+      background: transparent;
+      padding: 0.55rem 0.65rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.12rem;
+    }
+    .chat-item:hover {
+      background: #f4f6f3;
+      border-color: var(--line);
+    }
+    .chat-item.active {
+      background: var(--accent-soft);
+      border-color: #c8e6d4;
+    }
+    .chat-item-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1.3;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .chat-item-meta {
+      font-size: 0.68rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .chats-empty {
+      padding: 0.85rem 0.65rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .workspace.chats-collapsed .chats-head-actions #chats-new,
+    .workspace.chats-collapsed .chats-list,
+    .workspace.chats-collapsed .chats-head strong {
+      display: none !important;
+    }
+    .workspace.chats-collapsed .chats-head {
+      flex: 1;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0.85rem;
+      padding: 0.65rem 0.25rem;
+      border-bottom: none;
+    }
+    .chats-collapsed-label {
+      display: none;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      font-family: "Syne", sans-serif;
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--ink);
+      user-select: none;
+    }
+    .workspace.chats-collapsed .chats-collapsed-label {
+      display: block;
     }
     .soi-panel {
       position: relative;
@@ -1125,6 +1239,17 @@
     </header>
 
     <div class="workspace" id="workspace">
+      <aside class="chats-rail" id="chats-rail" aria-label="Past chats">
+        <div class="chats-head">
+          <strong>Chats</strong>
+          <div class="chats-head-actions">
+            <button type="button" id="chats-new" title="Start a new chat">New</button>
+            <button type="button" id="chats-toggle" class="side-toggle" title="Collapse chats" aria-expanded="true" aria-controls="chats-rail">‹</button>
+          </div>
+          <span class="chats-collapsed-label" aria-hidden="true">Chats</span>
+        </div>
+        <div class="chats-list" id="chats-list"></div>
+      </aside>
       <section class="chat-pane" aria-label="Chat">
         <div id="log" aria-live="polite"></div>
       </section>
@@ -1177,6 +1302,10 @@
     const soiPanel = document.getElementById("soi-panel");
     const workspace = document.getElementById("workspace");
     const sideToggle = document.getElementById("side-toggle");
+    const chatsRail = document.getElementById("chats-rail");
+    const chatsList = document.getElementById("chats-list");
+    const chatsToggle = document.getElementById("chats-toggle");
+    const chatsNew = document.getElementById("chats-new");
     const soiOut = document.getElementById("soi-out");
     const soiFeed = document.getElementById("soi-feed");
     const soiState = document.getElementById("soi-state");
@@ -1228,6 +1357,118 @@
       if (e.target && e.target.closest && e.target.closest("#side-toggle")) return;
       setSideCollapsed(false);
     });
+
+    const CHATS_COLLAPSE_KEY = "ainet-chats-collapsed";
+    let currentChatId = "";
+    function setChatsCollapsed(on) {
+      const collapsed = !!on;
+      if (workspace) workspace.classList.toggle("chats-collapsed", collapsed);
+      if (chatsToggle) {
+        chatsToggle.textContent = collapsed ? "›" : "‹";
+        chatsToggle.title = collapsed ? "Expand chats" : "Collapse chats";
+        chatsToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      }
+      try { localStorage.setItem(CHATS_COLLAPSE_KEY, collapsed ? "1" : "0"); } catch (e) {}
+      window.dispatchEvent(new Event("resize"));
+    }
+    try {
+      setChatsCollapsed(localStorage.getItem(CHATS_COLLAPSE_KEY) === "1");
+    } catch (e) {
+      setChatsCollapsed(false);
+    }
+    if (chatsToggle) chatsToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const now = workspace && workspace.classList.contains("chats-collapsed");
+      setChatsCollapsed(!now);
+    });
+    if (chatsRail) chatsRail.addEventListener("click", (e) => {
+      if (!workspace || !workspace.classList.contains("chats-collapsed")) return;
+      if (e.target && e.target.closest && e.target.closest("#chats-toggle")) return;
+      setChatsCollapsed(false);
+    });
+
+    function chatWhen(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "";
+      const now = new Date();
+      const sameDay = d.toDateString() === now.toDateString();
+      if (sameDay) {
+        return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      }
+      return d.toLocaleDateString([], { month: "short", day: "numeric" });
+    }
+
+    function renderChats(rows, sessionId) {
+      if (!chatsList) return;
+      currentChatId = sessionId || currentChatId;
+      chatsList.innerHTML = "";
+      if (!rows || !rows.length) {
+        const empty = document.createElement("div");
+        empty.className = "chats-empty";
+        empty.textContent = "No chats yet.";
+        chatsList.appendChild(empty);
+        return;
+      }
+      for (const row of rows) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chat-item" + (row.id === currentChatId ? " active" : "");
+        btn.dataset.id = row.id;
+        const title = document.createElement("span");
+        title.className = "chat-item-title";
+        title.textContent = row.title || "New chat";
+        const meta = document.createElement("span");
+        meta.className = "chat-item-meta";
+        meta.textContent = chatWhen(row.updated_at);
+        btn.appendChild(title);
+        btn.appendChild(meta);
+        btn.addEventListener("click", () => openChat(row.id));
+        chatsList.appendChild(btn);
+      }
+    }
+
+    async function loadChats() {
+      try {
+        const r = await fetch("/api/chats");
+        const s = await r.json();
+        if (s && s.ok) renderChats(s.chats || [], s.session_id || "");
+      } catch (e) {}
+    }
+
+    function replayChatTurns(turns) {
+      logEl.innerHTML = "";
+      if (!turns || !turns.length) {
+        addMessage("This chat is empty.", "sys");
+        return;
+      }
+      for (const turn of turns) {
+        if (turn.user) addMessage(turn.user, "user");
+        if (turn.assistant) {
+          const bot = addMessage("", "bot");
+          flushLiveMarkdown(bot._body, turn.assistant);
+        }
+      }
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    async function openChat(id) {
+      if (!id || id === currentChatId || busy) return;
+      try {
+        const data = await post("/api/chats/open", { id: id }, 5000);
+        if (!data || !data.ok) {
+          addMessage(asText((data && data.error) || "Could not open chat"), "sys");
+          return;
+        }
+        const chat = data.chat || {};
+        currentChatId = chat.id || id;
+        replayChatTurns(chat.turns || []);
+        renderMeta(data);
+        await loadChats();
+      } catch (err) {
+        addMessage("Could not open chat — " + asText(err), "sys");
+      }
+    }
 
     function closeSoiStream() {
       soiStreamOk = false;
@@ -2326,6 +2567,7 @@
         }
       }
       if (s.mode) modeSel.value = s.mode;
+      if (s.session_id) currentChatId = s.session_id;
       if (Object.prototype.hasOwnProperty.call(s, "soi_running")) {
         setSoiUi(!!s.soi_running);
       }
@@ -2613,8 +2855,10 @@
         return { ok: false };
       }
       if (data && data.ok) {
-        addMessage("New OAC session", "sys");
+        logEl.innerHTML = "";
+        addMessage("New chat", "sys");
         renderMeta(data);
+        await loadChats();
       } else {
         addMessage(asText((data && data.error) || "Reset failed"), "sys");
       }
@@ -2654,7 +2898,10 @@
           botMsg._body.classList.add("plain");
           botMsg._body.classList.remove("md", "sys");
           botMsg._body.textContent = data.error || "Error";
-        } else if (data) renderMeta(data);
+        } else if (data) {
+          renderMeta(data);
+          loadChats();
+        }
       } catch (err) {
         botMsg.classList.add("error");
         botMsg._body.classList.add("plain");
@@ -2674,6 +2921,9 @@
     });
 
     document.getElementById("reset").addEventListener("click", async () => {
+      try { await resetAi(false); } catch (err) { addMessage(asText(err), "sys"); }
+    });
+    if (chatsNew) chatsNew.addEventListener("click", async () => {
       try { await resetAi(false); } catch (err) { addMessage(asText(err), "sys"); }
     });
     document.getElementById("hard-reset").addEventListener("click", async () => {
@@ -2775,6 +3025,16 @@
     }
 
     refreshStatus();
+    loadChats().then(async () => {
+      if (!currentChatId) return;
+      try {
+        const r = await fetch("/api/chats?id=" + encodeURIComponent(currentChatId));
+        const payload = await r.json();
+        if (payload && payload.ok && payload.chat && (payload.chat.turns || []).length) {
+          replayChatTurns(payload.chat.turns);
+        }
+      } catch (e) {}
+    });
     pullSoiLog();
     connectSoiStream();
     setInterval(refreshStatus, 8000);

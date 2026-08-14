@@ -11,6 +11,8 @@ _CREATE_UNDER = ("Hayden", "Household", "Projects", "Questions")
 _HIDDEN_CHILDREN: dict[str, set[str]] = {
     # Inbox is not a long-term filing target (file_note blocks it).
     "Hayden": {"Inbox", "School", "Work"},
+    # Questions/Research is not the Deep Research vault, but dest=Research is forbidden.
+    "Questions": {"Research"},
 }
 
 
@@ -52,26 +54,56 @@ def build_test_filing_payload(
     }
 
 
+def _group_changelog(entries: list[Any]) -> list[dict[str, Any]]:
+    """Group turns by session so the model can resolve pronouns across a thread."""
+    groups: list[dict[str, Any]] = []
+    index: dict[str, int] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        sid = str(entry.get("session_id") or "").strip() or "(no session)"
+        if sid not in index:
+            index[sid] = len(groups)
+            groups.append({"session_id": sid, "entries": []})
+        groups[index[sid]]["entries"].append(
+            {
+                "id": entry.get("id"),
+                "ts": entry.get("ts"),
+                "user_text": entry.get("user_text"),
+            }
+        )
+    return groups
+
+
 def format_test_user_message(prompt: str, payload: dict[str, Any]) -> str:
-    """User message: prompt text, then labeled sections."""
-    lines = [prompt.strip(), ""]
+    """User message: short header, then labeled batch sections (rules live in system)."""
+    lines: list[str] = []
+    header = (prompt or "").strip()
+    if header:
+        lines.append(header)
+        lines.append("")
 
     create_under = payload.get("create_under") or []
     lines.append("create_under: " + ", ".join(str(x) for x in create_under))
+    lines.append("Questions is the only create_under root you may file into directly.")
     lines.append("")
 
     folders = payload.get("folders") or {}
     lines.append("folders:")
     for domain in _CREATE_UNDER:
         kids = folders.get(domain) or []
-        lines.append(f"  {domain}: " + (", ".join(kids) if kids else "(none)"))
+        if kids:
+            label = ", ".join(kids)
+        elif domain == "Questions":
+            label = "(none - dest=Questions)"
+        else:
+            label = "(none)"
+        lines.append(f"  {domain}: {label}")
     lines.append("")
 
-    lines.append("changelog_entries:")
-    import json
-
+    lines.append("changelog_entries (grouped by session, chronological within each):")
     entries = payload.get("changelog_entries") or []
-    lines.append(json.dumps(entries, ensure_ascii=False, indent=2))
+    lines.append(json.dumps(_group_changelog(entries), ensure_ascii=False, indent=2))
 
     inbox = payload.get("inbox_unfiled") or []
     if inbox:

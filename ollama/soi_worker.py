@@ -19,10 +19,8 @@ from ollama.config import OllamaConfig
 from ollama.modes import get_mode
 from ollama.content_filing import (
     cop_name_in_text,
-    entry_kind,
     is_ephemeral_text,
 )
-from ollama.dest_resolver import build_file_structure, list_dest_labels
 from ollama.filing_payload import (
     build_read_refresh_folders,
     build_test_filing_payload,
@@ -32,7 +30,6 @@ from ollama.filing_payload import (
 from ollama.prompts.soi_test import FILING_INSTRUCTIONS, READ_REFRESH_INSTRUCTIONS
 from ollama.session import ChatSession
 from ollama.soi_log import SOILogger
-from ollama.topics import record_personal_filing
 
 _FILING_BATCH_SIZE = 4
 _SOI_MIN_TOOL_ROUNDS = 6
@@ -54,6 +51,7 @@ def _entry_for_soi(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": entry.get("id"),
         "ts": entry.get("ts"),
+        "session_id": str(details.get("session_id") or "").strip(),
         "user_text": str(details.get("user_text") or entry.get("summary") or "").strip(),
     }
 
@@ -311,7 +309,6 @@ class SOIWorker:
         batch_changelog: list[dict[str, Any]],
         batch_inbox: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        self._annotate_suggested_filing(batch_changelog)
         layout = {}
         if self.db.paths.resolve("Folderrules.json").exists():
             raw = self.db.read_json("Folderrules.json")["data"]
@@ -410,7 +407,7 @@ class SOIWorker:
                 eid = str(entry.get("id") or "")
                 if not eid or eid in handled_by_id or eid in discarded_ids:
                     continue
-                if entry.get("suggested_filing") == "discard":
+                if _is_ephemeral_entry(entry):
                     continue
                 text = _entry_user_text(entry)
                 if ("/Courses/" in path or "/Projects/" in path) and not cop_name_in_text(
@@ -449,29 +446,16 @@ class SOIWorker:
                     self.db.write_json(plan, data, summary=f"File oac_turn {eid} into {plan}")
                 _add_dest(dest_by_id, eid, plan)
 
-        # Host safety nets only for ids SOI did not already place by id.
-        leftover = [
-            e for e in batch_changelog if str(e.get("id") or "") not in handled_by_id
-        ]
-        host_general = self._host_file_general_turns(leftover)
-        for eid, path in (host_general.get("dest_by_id") or {}).items():
-            _add_dest(dest_by_id, str(eid), str(path or ""))
-        host_personal = self._host_file_personal_turns(leftover)
-        for eid, path in (host_personal.get("dest_by_id") or {}).items():
-            _add_dest(dest_by_id, str(eid), str(path or ""))
+        # Leftovers stay pending — host does not regex-dump them into folders.
         host_inbox = self._host_file_inbox(batch_inbox)
-        self._host_complement_multi_dest(batch_changelog, dest_by_id, discarded_ids)
 
-        # Host-auto discard ephemeral if model forgot.
+        # Host-auto discard ephemeral if model forgot. Do not auto-file leftovers.
         for entry in batch_changelog:
             eid = str(entry.get("id") or "")
             if eid and _is_ephemeral_entry(entry):
                 discarded_ids.add(eid)
 
-        # Host general filing marks those entry ids as evidenced.
-        host_filed_ids = {str(x) for x in (host_general.get("filed_ids") or []) if x}
-        host_filed_ids.update(str(x) for x in (host_personal.get("filed_ids") or []) if x)
-        host_filed_ids.update(k for k, v in dest_by_id.items() if v)
+        host_filed_ids = {k for k, v in dest_by_id.items() if v}
 
         filed_ids: list[str] = []
         left_pending: list[str] = []
@@ -579,9 +563,6 @@ class SOIWorker:
                 continue
         return placed
 
-    def _annotate_suggested_filing(self, batch_changelog: list[dict[str, Any]]) -> None:
-        for entry in batch_changelog:
-            entry["suggested_filing"] = entry_kind(entry)
 
     def run_once(self) -> dict[str, Any]:
         """Back-compat: run filing phase."""
@@ -993,284 +974,6 @@ class SOIWorker:
         data["last_updated"] = _utc_now()
         self.db.write_json(path, data, summary=summary)
         return True
-
-    def _host_complement_multi_dest(
-        self,
-        batch_changelog: list[dict[str, Any]],
-        dest_by_id: dict[str, Any],
-        discarded_ids: set[str],
-    ) -> None:
-        """Add secondary homes when one turn clearly belongs in more than one place."""
-        for entry in batch_changelog:
-            eid = str(entry.get("id") or "")
-            if not eid or eid in discarded_ids or _is_ephemeral_entry(entry):
-                continue
-            text = _entry_user_text(entry)
-            if not text:
-                continue
-            low = text.lower()
-            cur = dest_by_id.get(eid)
-            if isinstance(cur, list):
-                paths = [str(p).replace("\\", "/") for p in cur if p]
-            elif cur:
-                paths = [str(cur).replace("\\", "/")]
-            else:
-                paths = []
-            joined = " ".join(paths).lower()
-
-            taste = bool(
-                re.search(r"\b(i (really )?(like|love|prefer)|favorite|favourite)\b", low)
-                and re.search(
-                    r"\b(diet coke|coke|soda|coffee|matcha|espresso|latte|tea|ramen|"
-                    r"food|drink|beer|wine|snack|chip|candy)\b",
-                    low,
-                )
-            )
-            grocery = bool(
-                re.search(
-                    r"\b(diet coke|coke|soda|oat milk|dish soap|pantry|restock|"
-                    r"buy|stock|grocery|groceries)\b",
-                    low,
-                )
-            )
-
-            # Taste/like language always belongs in Preferences, even if also in Pantry.
-            if taste and "preferences" not in joined:
-                pref = "Hayden/Preferences/Food.json"
-                if self._host_append_note(
-                    pref,
-                    field="likes",
-                    note=text,
-                    summary="Complement food preference from oac_turn",
-                ):
-                    _add_dest(dest_by_id, eid, pref)
-                    joined += " " + pref.lower()
-
-            # Grocery/stock language belongs in Pantry, even if already a preference.
-            if grocery and "pantry" not in joined and (
-                taste or "preferences" in joined or re.search(r"\b(restock|buy|stock|grocery)\b", low)
-            ):
-                pantry = "Household/Pantry/Staples.json"
-                if not self.db.paths.resolve(pantry).exists():
-                    self.db.create_json(
-                        pantry,
-                        {"staples": [], "low": [], "last_updated": _utc_now()},
-                        summary="Host-create pantry staples",
-                    )
-                data = self.db.read_json(pantry)["data"]
-                if isinstance(data, dict):
-                    staples = data.get("staples") if isinstance(data.get("staples"), list) else []
-                    if text not in staples:
-                        staples.append(text)
-                    data["staples"] = staples
-                    data["last_updated"] = _utc_now()
-                    self.db.write_json(pantry, data, summary="Complement pantry item from oac_turn")
-                    _add_dest(dest_by_id, eid, pantry)
-
-    def _host_file_general_turns(self, batch_changelog: list[dict[str, Any]]) -> dict[str, Any]:
-        """Deterministic leaf filing when SOI skips lasting turns."""
-        filed_ids: list[str] = []
-        actions: list[str] = []
-        dest_by_id: dict[str, str] = {}
-        for entry in batch_changelog:
-            if entry.get("suggested_filing") == "discard":
-                continue
-            if _is_ephemeral_entry(entry):
-                continue
-            eid = str(entry.get("id") or "")
-            if not eid:
-                continue
-            text = _entry_user_text(entry)
-            low = text.lower()
-            filed = False
-            dest_path = ""
-
-            if re.search(r"\b(coffee shop|outlet table|library|deep-?work spot|place)\b", low):
-                dest_path = "Hayden/Preferences/Lifestyle.json"
-                filed = self._host_append_note(
-                    dest_path,
-                    field="environments",
-                    note=text,
-                    summary="Host-file place/lifestyle pref from oac_turn",
-                )
-            elif re.search(
-                r"\b(matcha|espresso|latte|drip coffee|diet coke|coke|soda|food|ramen|eat)\b",
-                low,
-            ):
-                dest_path = "Hayden/Preferences/Food.json"
-                filed = self._host_append_note(
-                    dest_path,
-                    field="likes",
-                    note=text,
-                    summary="Host-file food pref from oac_turn",
-                )
-            elif re.search(r"\b(focus block|pomodoro|stretch|habit|routine|every afternoon)\b", low):
-                dest_path = "Hayden/Habits/Routines.json"
-                filed = self._host_append_note(
-                    dest_path,
-                    field="rituals",
-                    note=text,
-                    summary="Host-file habit from oac_turn",
-                )
-            elif re.search(r"\b(met|makerspace)\b", low):
-                m = re.search(r"\b(?:Met|met)\s+([A-Z][a-z]+)\b", text)
-                if not m:
-                    m = re.search(r"\b([A-Z][a-z]{2,})\b", text)
-                name = m.group(1) if m else ""
-                if not name or name.lower() in {"the", "for", "met", "i", "bio", "pcb"}:
-                    continue
-                dest_path = f"Hayden/Relationships/People/{name}.json"
-                person_path = dest_path
-                if not self.db.paths.resolve(person_path).exists():
-                    self.db.create_json(
-                        person_path,
-                        {
-                            "name": name,
-                            "aliases": [],
-                            "how_we_met": text,
-                            "relationship_type": "acquaintance",
-                            "status": "active",
-                            "closeness": 0.3,
-                            "how_i_feel": "",
-                            "how_i_act_around_them": "",
-                            "what_they_know_about_me": [],
-                            "what_i_know_about_them": [text],
-                            "shared_history": [],
-                            "boundaries": [],
-                            "secrets_involving_them": [],
-                            "triggers_around_them": [],
-                            "tags": [],
-                            "related_paths": [],
-                            "last_updated": _utc_now(),
-                        },
-                        summary=f"Host-create person dossier for {name}",
-                    )
-                else:
-                    self._host_append_note(
-                        person_path,
-                        field="what_i_know_about_them",
-                        note=text,
-                        summary=f"Host-update person dossier for {name}",
-                    )
-                filed = True
-            elif re.search(r"\b(oat milk|dish soap|pantry|restock|household)\b", low):
-                dest_path = "Household/Pantry/Staples.json"
-                path = dest_path
-                if not self.db.paths.resolve(path).exists():
-                    self.db.create_json(
-                        path,
-                        {"staples": [], "low": [], "last_updated": _utc_now()},
-                        summary="Host-create pantry staples",
-                    )
-                data = self.db.read_json(path)["data"]
-                if isinstance(data, dict):
-                    low_list = data.get("low") if isinstance(data.get("low"), list) else []
-                    if text not in low_list:
-                        low_list.append(text)
-                    data["low"] = low_list
-                    data["last_updated"] = _utc_now()
-                    self.db.write_json(path, data, summary="Host-file household restock")
-                    filed = True
-            elif re.search(r"\b(wrist|trackpad|ergonomic|sleep|sore)\b", low):
-                dest_path = "Hayden/Body/Health.json"
-                filed = self._host_append_note(
-                    dest_path,
-                    field="notes",
-                    note=text,
-                    summary="Host-file body/health note",
-                )
-            elif re.search(r"\b(anxious|open loops?|trigger)\b", low):
-                dest_path = "Hayden/Psychology/Triggers.json"
-                filed = self._host_append_note(
-                    dest_path,
-                    field="triggers",
-                    note=text,
-                    summary="Host-file psychology trigger",
-                )
-            elif re.search(r"\b(goal|this month|trust(?:ing)? the (?:personal )?db)\b", low):
-                dest_path = "Hayden/Desires/Goals.json"
-                filed = self._host_append_note(
-                    dest_path,
-                    field="goals",
-                    note=text,
-                    summary="Host-file desire/goal",
-                )
-            elif re.search(r"\b(craftsmanship|half-baked|values?|identity)\b", low):
-                dest_path = "Hayden/Values/Principles.json"
-                filed = self._host_append_note(
-                    dest_path,
-                    field="values",
-                    note=text,
-                    summary="Host-file values/identity note",
-                )
-            elif re.search(r"\b(ainet|soi filing|project)\b", low):
-                dest_path = "Work/Projects/AINet/Plan.json"
-                path = dest_path
-                if self.db.paths.resolve(path).exists():
-                    data = self.db.read_json(path)["data"]
-                    if isinstance(data, dict):
-                        plans = data.get("plans") if isinstance(data.get("plans"), list) else []
-                        if text not in plans:
-                            plans.append(text)
-                        data["plans"] = plans
-                        self.db.write_json(path, data, summary="Host-file AINet plan note")
-                        filed = True
-            elif re.search(r"\b(esp32|milestone|huge win|remember when)\b", low):
-                dest_path = "Hayden/Memories/Milestones/Log.json"
-                path = dest_path
-                if self.db.paths.resolve(path).exists():
-                    data = self.db.read_json(path)["data"]
-                    if isinstance(data, dict):
-                        entries = data.get("entries") if isinstance(data.get("entries"), list) else []
-                        entries.append(
-                            {
-                                "id": eid[:12],
-                                "title": text[:80],
-                                "when": "",
-                                "why_it_matters": text,
-                            }
-                        )
-                        data["entries"] = entries[-40:]
-                        data["last_updated"] = _utc_now()
-                        self.db.write_json(path, data, summary="Host-file memory milestone")
-                        filed = True
-
-            if filed:
-                filed_ids.append(eid)
-                actions.append(f"{eid}:{text[:40]}")
-                if dest_path:
-                    dest_by_id[eid] = dest_path
-
-        return {"filed_ids": filed_ids, "actions": actions, "dest_by_id": dest_by_id}
-
-    def _host_file_personal_turns(self, batch_changelog: list[dict[str, Any]]) -> dict[str, Any]:
-        """Identity / psychology / habits / voice."""
-        filed_ids: list[str] = []
-        dest_by_id: dict[str, str] = {}
-        for entry in batch_changelog:
-            kind = entry.get("suggested_filing") or entry_kind(entry)
-            if kind not in {"identity", "personality", "voice", "psychology", "habits"}:
-                continue
-            if _is_ephemeral_entry(entry):
-                continue
-            eid = str(entry.get("id") or "")
-            if not eid:
-                continue
-            details = entry.get("details") if isinstance(entry.get("details"), dict) else {}
-            path = record_personal_filing(
-                self.db,
-                kind,
-                user=_entry_user_text(entry),
-                assistant=str(details.get("assistant_text") or ""),
-                entry_ids=[eid],
-            )
-            if kind in {"voice", "identity", "personality"}:
-                from ollama.file_by_id import _append_voice_evidence
-
-                _append_voice_evidence(self.db, _entry_user_text(entry))
-            filed_ids.append(eid)
-            dest_by_id[eid] = path or f"Hayden/{kind}/Notes.json"
-        return {"filed_ids": filed_ids, "dest_by_id": dest_by_id}
 
     def _host_observe_voice_from_masterlog(self) -> dict[str, Any]:
         """Phase 2: speech/tone/swearing evidence from how Hayden actually prompted."""

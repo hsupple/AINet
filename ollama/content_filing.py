@@ -1,4 +1,4 @@
-"""Content-based filing hints. Ignore OAC mode — file from what was said."""
+"""Helpers for SOI filing: ephemeral discard + COP-name checks. Not a folder router."""
 
 from __future__ import annotations
 
@@ -7,63 +7,26 @@ from typing import Any
 
 
 _EPHEMERAL = re.compile(
-    r"^\s*(hi|hey|hello|heyo|yo|sup|hiya|hi bud|hey pal|bruh|good (morning|afternoon|evening)"
-    r"|thanks|thank you|thx|ty|cool|ok|okay|got it|bye|good ?night|gg|np|yw|lol ok)\b[.!]?\s*$",
+    r"^\s*("
+    r"hi|hey|hello|heyo|yo|sup|hiya|hi bud|hey pal|bruh|"
+    r"good (morning|afternoon|evening)|"
+    r"thanks|thank you|thx|ty|"
+    r"cool( go on)?|ok(ay)?|k+|kk|sure|yeah|yep|yup|bet|alright|got it|"
+    r"go on|continue|keep going|sounds good|"
+    r"bye|good ?night|gg|np|yw|lol( ok)?|lmao|nvm|nm"
+    r")[.!?]*\s*$",
     re.I,
 )
-_PSYCH = re.compile(
-    r"("
-    r"\bfeelings?\b|\blonely\b|\bloneliness\b|\bfloating\b|"
-    r"\bi feel\b|i just feel|i feel like|"
-    r"i'?m (pretty |kinda |so |really )?(anxious|stressed|scared|sad|depressed|lonely|overwhelmed|worthless)|"
-    r"discuss my feelings|talk about my feelings|my feelings|"
-    r"i (don'?t|do not) like myself|i hate myself|i dislike myself|"
-    r"self[- ]esteem|self[- ]hate|trigger|open loops?|coping|defense|attachment|"
-    r"i'?m struggling|makes me (feel|anxious)|"
-    r"need a (friend|partner)|my own best friend|"
-    r"friends don'?t|family doesn'?t"
-    r")",
-    re.I,
-)
-_HABIT = re.compile(
-    r"\b(every (morning|afternoon|night|day)|routine|habit|pomodoro|"
-    r"i always|i keep|discipline|vice|i'?ve been switching|"
-    r"gym|workout|went to the gym)\b",
-    re.I,
-)
-_IDENTITY = re.compile(
-    r"\b(i (care|value|hate|love) |who i am|that'?s so me|craftsmanship|"
-    r"how i (talk|speak|sound)|my (tone|personality|style))\b",
-    re.I,
-)
-_VOICE_CUE = re.compile(
-    r"\b(fuck|shit|ass|bitch|damn|crap|retard|lol|lmao|ngl|fr)\b",
-    re.I,
-)
+
+
 def is_ephemeral_text(text: str) -> bool:
+    """True for greetings / acknowledgment-only turns — discard, do not file."""
     t = (text or "").strip()
     if not t:
         return True
     if len(t) < 80 and _EPHEMERAL.match(t):
         return True
     return False
-
-
-def content_kind(user_text: str, assistant_text: str = "") -> str:
-    """Where lasting content belongs. Default is store, not discard."""
-    user = (user_text or "").strip()
-    asst = (assistant_text or "").strip()
-    if is_ephemeral_text(user):
-        return "discard"
-    if _PSYCH.search(user):
-        return "psychology"
-    if _HABIT.search(user):
-        return "habits"
-    if _IDENTITY.search(user):
-        return "identity"
-    if _VOICE_CUE.search(user):
-        return "voice"
-    return "general"
 
 
 def cop_name_in_text(path: str, user_text: str) -> bool:
@@ -79,8 +42,6 @@ def cop_name_in_text(path: str, user_text: str) -> bool:
     return token in blob
 
 
-def entry_kind(entry: dict[str, Any]) -> str:
+def entry_user_text(entry: dict[str, Any]) -> str:
     details = entry.get("details") if isinstance(entry.get("details"), dict) else {}
-    user = str(details.get("user_text") or entry.get("summary") or "").strip()
-    asst = str(details.get("assistant_text") or "").strip()
-    return content_kind(user, asst)
+    return str(details.get("user_text") or entry.get("summary") or "").strip()

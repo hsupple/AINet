@@ -803,34 +803,42 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "file_note",
             "description": (
-                "Phase 1 filing — preferred for SOI. Pass entry_id, dest (simple label), "
-                "and text (a short note YOU write about the turn). Host stores the note in "
-                "<folder>/Notes.json with id as evidence, and the raw message + id in History.json. "
-                "Call again with the same entry_id and a different dest when the turn belongs "
-                "in multiple folders (e.g. Preferences + Pantry). "
-                "dest examples: Values, Memories, Psychology, Habits, Desires, Pantry, discard."
+                "Phase 1 filing — preferred for SOI. Pass dest, text (a short note YOU write), "
+                "and entry_id or entry_ids. Same-session threads MAY be one synthesized note "
+                "with entry_ids covering the whole inquiry. Host stores the note in "
+                "<folder>/Notes.json and each raw message in History.json. "
+                "Call again with the same entry_id and a different dest when one turn "
+                "contains several kinds of fact (friends -> Relationships, feelings -> "
+                "Psychology, wants -> Desires). Each call's text covers only that dest. "
+                "dest=discard for greetings and acknowledgment-only turns."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "entry_id": {
                         "type": "string",
-                        "description": "Changelog entry id",
+                        "description": "One Changelog entry id",
+                    },
+                    "entry_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Several Changelog ids for one synthesized same-session note",
                     },
                     "dest": {
                         "type": "string",
                         "description": (
-                            "Folder from the folders list — path (Hayden/School, Hayden/Values) "
-                            "or folder name (Values, Pantry). discard for greetings only."
+                            "Folder from the folders list (Values, Pantry, Hayden/Values) "
+                            "or Questions (the only allowed root). discard for greetings/"
+                            "acknowledgments with no new information."
                         ),
                     },
                     "text": {
                         "type": "string",
-                        "description": "Short note you write summarizing what to keep (not a raw paste)",
+                        "description": "Short note that will make sense months later (not a raw paste)",
                     },
                     "summary": {"type": "string"},
                 },
-                "required": ["entry_id", "dest"],
+                "required": ["dest"],
             },
         },
     },
@@ -1084,6 +1092,7 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
         "file_note": lambda **kw: file_note_mod.file_note(
             db,
             entry_id=str(kw.get("entry_id") or kw.get("id") or ""),
+            entry_ids=kw.get("entry_ids"),
             dest=str(kw.get("dest") or ""),
             text=str(kw.get("text") or ""),
             summary=kw.get("summary"),

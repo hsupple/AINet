@@ -370,7 +370,7 @@ class SOITestApp:
                 "source_db": str(self.source_db),
                 "sandbox": str(self.sandbox) if self.sandbox else None,
                 "model": self.config.model,
-                "prompt": soi_test_prompt.FILING_INSTRUCTIONS,
+                "prompt": soi_test_prompt.PROMPT,
                 "seed": self.seed_meta,
                 "pending": pending,
                 "pending_count": len(pending),

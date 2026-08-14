@@ -11,6 +11,8 @@ from ainet.tools.paths import normalize_relpath
 _DISCARD = frozenset({"discard", "drop", "ephemeral"})
 _DOMAINS = ("Hayden", "Household", "Projects", "Questions")
 _BLOCKED_TOP_LEVEL = frozenset({"School", "Work"})
+_ROOT_DESTS = frozenset({"Questions"})
+_RESEARCH_DESTS = frozenset({"research", "questions/research"})
 
 
 def build_file_structure(db: DatabaseTools, *, max_depth: int = 6) -> dict[str, Any]:
@@ -40,9 +42,12 @@ def _list_folder_paths(db: DatabaseTools) -> list[str]:
             if "runtime" in node.parts or "__pycache__" in node.parts:
                 continue
             try:
-                paths.append(node.relative_to(root).as_posix())
+                rel = node.relative_to(root).as_posix()
             except ValueError:
                 continue
+            if rel.lower() == "questions/research":
+                continue
+            paths.append(rel)
     return paths
 
 
@@ -69,20 +74,34 @@ def resolve_dest(db: DatabaseTools, dest: str, *, user_text: str = "") -> str | 
     if raw.lower() in _DISCARD:
         return "discard"
 
-    if raw == "Questions":
+    normalized = raw.replace("\\", "/").strip("/").lower()
+    if normalized in _RESEARCH_DESTS:
         return "Questions"
+
+    # Questions is the one create_under root where filing at the root is allowed.
+    if raw in _ROOT_DESTS:
+        return raw
 
     # School/Work are not valid top-level filing targets here.
     if raw in _BLOCKED_TOP_LEVEL:
         return None
 
-    # Top-level domains are not filing targets — pick a child folder.
+    # dest=Projects means Hayden/Projects (informal notes), not the top-level COP root.
+    if raw == "Projects":
+        hayden_projects = "Hayden/Projects"
+        if db.paths.resolve(hayden_projects).is_dir():
+            return hayden_projects
+        return None
+
+    # Other top-level domains are not filing targets — pick a child folder.
     if raw in _DOMAINS:
         return None
 
     # Path form: Hayden/Values, Projects/AINet, Preferences/Food
     if "/" in raw:
         path = _qualify_path(raw)
+        if path.lower() == "questions/research":
+            return "Questions"
         target = db.paths.resolve(path)
         if target.is_dir():
             return path
