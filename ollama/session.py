@@ -602,6 +602,16 @@ class ChatSession:
                                     )
                                 if cards:
                                     done_detail["articles"] = cards
+                        if name == "create_plot" and isinstance(result, dict) and result.get("ok"):
+                            fig = result.get("figure")
+                            if isinstance(fig, dict):
+                                done_detail["plot"] = fig
+                                done_detail["plot_meta"] = {
+                                    "chart": str(result.get("chart") or ""),
+                                    "title": str(result.get("title") or ""),
+                                    "source": str(result.get("source") or ""),
+                                    "animate": bool(result.get("animate", True)),
+                                }
                         on_tool("done", name, done_detail)
                     payload = self._truncate_tool_result(name, result)
                     self.messages.append(
@@ -744,6 +754,8 @@ class ChatSession:
             if isinstance(opened, list) and opened:
                 base += " · Google Images"
             return base
+        if name == "create_plot":
+            return str(result.get("summary") or result.get("chart") or "plot")
         if name == "web_fetch":
             text = result.get("text") or ""
             return f"{len(text)} chars"
@@ -1239,6 +1251,16 @@ class ChatSession:
                 limit = max(limit, 4000)
             elif name == "image_search":
                 limit = max(limit, 5000)
+        if name == "create_plot" and isinstance(result, dict):
+            return {
+                "ok": result.get("ok", True),
+                "chart": result.get("chart"),
+                "title": result.get("title"),
+                "series_count": result.get("series_count"),
+                "summary": result.get("summary"),
+                "source": result.get("source"),
+                "note": "Chart rendered in the chat UI.",
+            }
         if len(raw) <= limit:
             return result
         return {
@@ -1428,6 +1450,7 @@ class ChatSession:
             "web_search",
             "web_fetch",
             "image_search",
+            "create_plot",
             "open_chrome",
             "get_tools",
             "getTools",

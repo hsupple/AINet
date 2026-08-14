@@ -154,11 +154,20 @@
       display: grid;
       grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.85fr);
       gap: 0.75rem;
+      transition: grid-template-columns 280ms cubic-bezier(0.2, 0.85, 0.2, 1);
+    }
+    .workspace.side-collapsed {
+      grid-template-columns: minmax(0, 1fr) 44px;
+      gap: 0.55rem;
     }
     @media (max-width: 900px) {
       .workspace {
         grid-template-columns: 1fr;
         grid-template-rows: minmax(0, 1fr) minmax(260px, 40vh);
+      }
+      .workspace.side-collapsed {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1fr) 44px;
       }
     }
 
@@ -171,6 +180,72 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
+    }
+    .soi-panel {
+      position: relative;
+      transition: box-shadow 220ms ease;
+    }
+    .workspace.side-collapsed .soi-panel {
+      cursor: pointer;
+    }
+    .workspace.side-collapsed .soi-panel:hover {
+      box-shadow: var(--shadow-card-hover);
+    }
+    .workspace.side-collapsed .soi-body,
+    .workspace.side-collapsed .soi-view,
+    .workspace.side-collapsed #soi-state,
+    .workspace.side-collapsed #side-label,
+    .workspace.side-collapsed .soi-head-left {
+      display: none !important;
+    }
+    .workspace.side-collapsed .soi-head {
+      flex: 1;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0.85rem;
+      padding: 0.65rem 0.25rem;
+      border-bottom: none;
+    }
+    .workspace.side-collapsed .soi-head-right {
+      flex-direction: column;
+    }
+    .side-toggle {
+      flex-shrink: 0;
+      width: 1.85rem;
+      height: 1.85rem;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      font-size: 0.95rem;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .side-toggle:hover {
+      border-color: var(--line-strong);
+      background: #f3f5f1;
+    }
+    .workspace.side-collapsed .side-toggle {
+      margin-top: 0.15rem;
+    }
+    .side-collapsed-label {
+      display: none;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      font-family: "Syne", sans-serif;
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--ink);
+      user-select: none;
+    }
+    .workspace.side-collapsed .side-collapsed-label {
+      display: block;
     }
 
     #log {
@@ -550,6 +625,41 @@
       overflow: hidden;
     }
 
+    .plot-card {
+      margin: 0.35rem 0 0.55rem;
+      padding: 0.55rem 0.55rem 0.35rem;
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, #ffffff 0%, #f7f8f5 100%);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+      animation: tool-in 420ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
+    }
+    .plot-meta {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.15rem 0.45rem 0.35rem;
+      font-family: "Figtree", sans-serif;
+    }
+    .plot-meta strong {
+      font-size: 0.82rem;
+      letter-spacing: -0.01em;
+      color: var(--ink);
+    }
+    .plot-meta span {
+      font-size: 0.68rem;
+      color: var(--muted);
+      text-align: right;
+    }
+    .plot-host {
+      width: 100%;
+      min-height: 320px;
+    }
+    .plot-host .modebar { display: none !important; }
+    .plot-host .plotly .main-svg { border-radius: 12px; }
+
     @keyframes tool-in {
       from { opacity: 0; transform: translateY(8px) scale(0.985); }
       to { opacity: 1; transform: none; }
@@ -583,6 +693,12 @@
       font-size: 0.95rem;
     }
     .soi-head-left { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
+    .soi-head-right {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      flex-shrink: 0;
+    }
     .soi-view {
       display: inline-flex;
       padding: 2px;
@@ -978,7 +1094,7 @@
       <div class="meta" id="meta">Connecting…</div>
     </header>
 
-    <div class="workspace">
+    <div class="workspace" id="workspace">
       <section class="chat-pane" aria-label="Chat">
         <div id="log" aria-live="polite"></div>
       </section>
@@ -993,7 +1109,11 @@
               <button type="button" id="soi-view-dev" data-view="dev">Dev</button>
             </div>
           </div>
-          <span id="soi-state">Idle</span>
+          <div class="soi-head-right">
+            <span id="soi-state">Idle</span>
+            <button type="button" id="side-toggle" class="side-toggle" title="Collapse panel" aria-expanded="true" aria-controls="soi-panel">›</button>
+          </div>
+          <span class="side-collapsed-label" aria-hidden="true">SOI</span>
         </div>
         <div class="soi-body">
           <div id="soi-feed"></div>
@@ -1015,6 +1135,7 @@
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <script>
     const logEl = document.getElementById("log");
     const form = document.getElementById("form");
@@ -1024,6 +1145,8 @@
     const modeSel = document.getElementById("mode");
     const soiBtn = document.getElementById("soi");
     const soiPanel = document.getElementById("soi-panel");
+    const workspace = document.getElementById("workspace");
+    const sideToggle = document.getElementById("side-toggle");
     const soiOut = document.getElementById("soi-out");
     const soiFeed = document.getElementById("soi-feed");
     const soiState = document.getElementById("soi-state");
@@ -1042,6 +1165,39 @@
     let lastChatEventAt = 0;
     let stallNoticeShown = false;
     const pendingTools = new Map();
+
+    const SIDE_COLLAPSE_KEY = "ainet-side-collapsed";
+    function setSideCollapsed(on) {
+      const collapsed = !!on;
+      if (workspace) workspace.classList.toggle("side-collapsed", collapsed);
+      if (soiPanel) soiPanel.classList.toggle("collapsed", collapsed);
+      if (sideToggle) {
+        sideToggle.textContent = collapsed ? "‹" : "›";
+        sideToggle.title = collapsed ? "Expand panel" : "Collapse panel";
+        sideToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      }
+      try { localStorage.setItem(SIDE_COLLAPSE_KEY, collapsed ? "1" : "0"); } catch (e) {}
+      // Charts in chat may need a relayout after the grid width changes.
+      window.dispatchEvent(new Event("resize"));
+    }
+    function toggleSideCollapsed() {
+      const now = workspace && workspace.classList.contains("side-collapsed");
+      setSideCollapsed(!now);
+    }
+    try {
+      setSideCollapsed(localStorage.getItem(SIDE_COLLAPSE_KEY) === "1");
+    } catch (e) {
+      setSideCollapsed(false);
+    }
+    if (sideToggle) sideToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSideCollapsed();
+    });
+    if (soiPanel) soiPanel.addEventListener("click", (e) => {
+      if (!workspace || !workspace.classList.contains("side-collapsed")) return;
+      if (e.target && e.target.closest && e.target.closest("#side-toggle")) return;
+      setSideCollapsed(false);
+    });
 
     function closeSoiStream() {
       soiStreamOk = false;
@@ -1294,6 +1450,7 @@
       web_search: "Web search",
       web_fetch: "Open page",
       image_search: "Image search",
+      create_plot: "Plot",
       open_chrome: "Open in Chrome",
       save_research: "Save research",
       inspect_research: "Inspect research",
@@ -1805,6 +1962,7 @@
       if (!detail && name === "web_fetch") detail = "Reading page…";
       if (!detail && name === "web_search") detail = "Searching…";
       if (!detail && name === "image_search") detail = "Finding pictures…";
+      if (!detail && name === "create_plot") detail = "Building chart…";
       if (detail) detailEl.textContent = detail;
       else detailEl.remove();
       el.dataset.arg = detail || "";
@@ -1844,6 +2002,143 @@
       }
       if (ok && Array.isArray(row.images) && row.images.length) {
         renderImageGallery(msg._tools, row.images);
+      }
+      if (ok && row.plot) {
+        renderPlotCard(msg._tools, row.plot, row.plot_meta || {});
+      }
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function easeOutCubic(t) {
+      return 1 - Math.pow(1 - t, 3);
+    }
+
+    function sliceTraceByX(trace, progress) {
+      const t = JSON.parse(JSON.stringify(trace));
+      const xs = Array.isArray(t.x) ? t.x : null;
+      const ys = Array.isArray(t.y) ? t.y : null;
+      const zs = Array.isArray(t.z) && t.z.length && typeof t.z[0] !== "object" ? t.z : null;
+      if (!xs || !ys || Array.isArray(xs[0])) return t;
+      let xmin = Infinity;
+      let xmax = -Infinity;
+      for (const v of xs) {
+        const n = Number(v);
+        if (!Number.isFinite(n)) continue;
+        if (n < xmin) xmin = n;
+        if (n > xmax) xmax = n;
+      }
+      if (!Number.isFinite(xmin) || !Number.isFinite(xmax)) return t;
+      const cutoff = xmin + (xmax - xmin) * progress;
+      const nx = [];
+      const ny = [];
+      const nz = [];
+      for (let i = 0; i < xs.length; i++) {
+        if (Number(xs[i]) <= cutoff + 1e-12) {
+          nx.push(xs[i]);
+          ny.push(ys[i]);
+          if (zs) nz.push(zs[i]);
+        }
+      }
+      t.x = nx;
+      t.y = ny;
+      if (zs) t.z = nz;
+      return t;
+    }
+
+    function animateFigure(host, figure, meta) {
+      const fullData = Array.isArray(figure.data) ? figure.data : [];
+      const layout = Object.assign({}, figure.layout || {});
+      const cfg = {
+        responsive: true,
+        displayModeBar: false,
+        staticPlot: false,
+        locale: "en",
+      };
+      const wantAnim = meta.animate !== false && layout.ainet_animate !== false;
+      const chart = String(meta.chart || layout.ainet_chart || "");
+      const canSlice = fullData.some(
+        (tr) => Array.isArray(tr.x) && Array.isArray(tr.y) && !Array.isArray(tr.x[0])
+      );
+
+      if (!wantAnim || typeof Plotly === "undefined") {
+        Plotly.newPlot(host, fullData, layout, cfg);
+        return;
+      }
+
+      if (canSlice && !/surface|isosurface|heatmap|contour|pie|box|mesh3d/i.test(chart)) {
+        const empty = fullData.map((tr) => sliceTraceByX(tr, 0));
+        Plotly.newPlot(host, empty, layout, cfg).then(() => {
+          const t0 = performance.now();
+          const dur = 1500;
+          const tick = (now) => {
+            const p = easeOutCubic(Math.min(1, (now - t0) / dur));
+            const frame = fullData.map((tr) => sliceTraceByX(tr, p));
+            Plotly.react(host, frame, layout, cfg);
+            if (p < 1) requestAnimationFrame(tick);
+            else Plotly.react(host, fullData, layout, cfg);
+          };
+          requestAnimationFrame(tick);
+        });
+        return;
+      }
+
+      // Surfaces / heatmaps: fade + slight camera ease
+      const faded = fullData.map((tr) => {
+        const t = Object.assign({}, tr);
+        if (t.type === "surface" || t.type === "mesh3d" || t.type === "isosurface") t.opacity = 0.05;
+        else if (t.type === "heatmap" || t.type === "contour") t.opacity = 0.15;
+        return t;
+      });
+      Plotly.newPlot(host, faded, layout, cfg).then(() => {
+        const t0 = performance.now();
+        const dur = 1500;
+        const tick = (now) => {
+          const p = easeOutCubic(Math.min(1, (now - t0) / dur));
+          const frame = fullData.map((tr) => {
+            const t = Object.assign({}, tr);
+            if (t.type === "surface" || t.type === "mesh3d" || t.type === "isosurface") t.opacity = 0.05 + 0.91 * p;
+            else if (t.type === "heatmap" || t.type === "contour") t.opacity = 0.15 + 0.85 * p;
+            return t;
+          });
+          Plotly.react(host, frame, layout, cfg);
+          if (p < 1) requestAnimationFrame(tick);
+          else Plotly.react(host, fullData, layout, cfg);
+        };
+        requestAnimationFrame(tick);
+      });
+    }
+
+    function renderPlotCard(parent, figure, meta) {
+      if (!parent || !figure || typeof figure !== "object") return;
+      if (typeof Plotly === "undefined") {
+        const miss = document.createElement("div");
+        miss.className = "tool-detail";
+        miss.textContent = "Plotly failed to load — hard-refresh the page.";
+        parent.appendChild(miss);
+        return;
+      }
+      const card = document.createElement("div");
+      card.className = "plot-card";
+      const head = document.createElement("div");
+      head.className = "plot-meta";
+      const title = document.createElement("strong");
+      title.textContent = meta.title || (figure.layout && figure.layout.title && figure.layout.title.text) || "Chart";
+      const side = document.createElement("span");
+      const bits = [];
+      if (meta.chart) bits.push(String(meta.chart));
+      if (meta.source) bits.push(String(meta.source));
+      side.textContent = bits.join(" · ");
+      head.appendChild(title);
+      head.appendChild(side);
+      const host = document.createElement("div");
+      host.className = "plot-host";
+      card.appendChild(head);
+      card.appendChild(host);
+      parent.appendChild(card);
+      try {
+        animateFigure(host, figure, meta || {});
+      } catch (err) {
+        host.textContent = "Could not render chart: " + String(err);
       }
       logEl.scrollTop = logEl.scrollHeight;
     }

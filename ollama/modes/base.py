@@ -13,6 +13,7 @@ READ_TOOLS = (
     "web_search",
     "web_fetch",
     "image_search",
+    "create_plot",
     "open_chrome",
     "list_projects",
 )

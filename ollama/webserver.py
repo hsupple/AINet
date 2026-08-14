@@ -206,6 +206,10 @@ class ChatApp:
                         "entry_id",
                         "summary",
                         "question",
+                        "chart",
+                        "equation",
+                        "xlab",
+                        "ylab",
                     ):
                         if key in args and args[key] not in (None, ""):
                             slim[key] = args[key]
@@ -239,6 +243,12 @@ class ChatApp:
                 articles = detail.get("articles")
                 if isinstance(articles, list) and articles:
                     payload["articles"] = articles[:3]
+                plot = detail.get("plot")
+                if isinstance(plot, dict) and plot.get("data") is not None:
+                    payload["plot"] = plot
+                    meta = detail.get("plot_meta")
+                    if isinstance(meta, dict):
+                        payload["plot_meta"] = meta
                 events.put(payload)
 
         def _on_context(snap: dict[str, Any]) -> None:

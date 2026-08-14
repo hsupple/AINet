@@ -10,6 +10,7 @@ from ainet.tools.paths import PathError
 from ainet.tools.permissions import PermissionError_
 from ainet.tools.research import inspect_research, save_research
 from ainet.tools.web import image_search, web_fetch, web_search
+from ainet.tools.plot import create_plot
 
 # OAC-safe tools (no general DB mutations). Kept in sync with ollama.modes.base.
 READ_TOOL_NAMES = frozenset(
@@ -21,6 +22,7 @@ READ_TOOL_NAMES = frozenset(
         "web_search",
         "web_fetch",
         "image_search",
+        "create_plot",
         "open_chrome",
         "list_projects",
     }
@@ -513,6 +515,77 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "create_plot",
+            "description": (
+                "Render a clean interactive chart in the chat (2D or 3D). "
+                "Use for graphs, curves, stress-strain, surfaces, comparisons. "
+                "Pass numeric series and/or an equation like 'sin(x)' or 'x**2 + y**2'. "
+                "IF Hayden needs real material/data first -> web_search/web_fetch, then create_plot. "
+                "Never invent measured data; use search or equations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Chart title"},
+                    "chart": {
+                        "type": "string",
+                        "description": (
+                            "line | scatter | bar | area | histogram | box | pie | "
+                            "heatmap | contour | surface | isosurface | scatter3d | line3d. "
+                            "Use isosurface (or surface) for F(x,y,z)=0 implicit surfaces."
+                        ),
+                        "default": "line",
+                    },
+                    "xlab": {"type": "string", "description": "X-axis label"},
+                    "ylab": {"type": "string", "description": "Y-axis label"},
+                    "zlab": {"type": "string", "description": "Z-axis label (3D)"},
+                    "equation": {
+                        "type": "string",
+                        "description": (
+                            "Math expression. 2D: in x. Explicit surface: z=f(x,y) as f only. "
+                            "Implicit: F(x,y,z)=0 (LaTeX ok). Use ** or ^ for powers."
+                        ),
+                    },
+                    "x": {
+                        "description": "X values (numbers) for a single series shortcut",
+                    },
+                    "y": {
+                        "description": "Y values (numbers) for a single series shortcut",
+                    },
+                    "z": {
+                        "description": "Z values or 2D grid for 3D/heatmap",
+                    },
+                    "x_min": {"type": "number", "description": "Equation domain min x"},
+                    "x_max": {"type": "number", "description": "Equation domain max x"},
+                    "y_min": {"type": "number", "description": "Equation domain min y"},
+                    "y_max": {"type": "number", "description": "Equation domain max y"},
+                    "z_min": {"type": "number", "description": "Equation domain min z (isosurface)"},
+                    "z_max": {"type": "number", "description": "Equation domain max z (isosurface)"},
+                    "n": {"type": "integer", "description": "Sample count for equations"},
+                    "series": {
+                        "type": "array",
+                        "description": (
+                            "Multiple series: [{name, x, y, z?, equation?, x_min?, x_max?, "
+                            "y_min?, y_max?, z_min?, z_max?, n?, color?, labels? (pie)}]"
+                        ),
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Short citation if data came from the web",
+                    },
+                    "animate": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Animate draw-in along x (default true)",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_fetch",
             "description": (
                 "Fetch a public http(s) URL and return truncated plain text. "
@@ -893,6 +966,27 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
             kw["query"],
             count=int(kw.get("count", 6)),
             open_google=bool(kw["open_google"]) if "open_google" in kw else True,
+        ),
+        "create_plot": lambda **kw: create_plot(
+            str(kw.get("title") or ""),
+            chart=str(kw.get("chart") or "line"),
+            xlab=str(kw.get("xlab") or ""),
+            ylab=str(kw.get("ylab") or ""),
+            zlab=str(kw.get("zlab") or ""),
+            series=kw.get("series"),
+            x=kw.get("x"),
+            y=kw.get("y"),
+            z=kw.get("z"),
+            equation=str(kw.get("equation") or ""),
+            x_min=float(kw["x_min"]) if kw.get("x_min") is not None else None,
+            x_max=float(kw["x_max"]) if kw.get("x_max") is not None else None,
+            y_min=float(kw["y_min"]) if kw.get("y_min") is not None else None,
+            y_max=float(kw["y_max"]) if kw.get("y_max") is not None else None,
+            z_min=float(kw["z_min"]) if kw.get("z_min") is not None else None,
+            z_max=float(kw["z_max"]) if kw.get("z_max") is not None else None,
+            n=int(kw["n"]) if kw.get("n") is not None else None,
+            animate=bool(kw["animate"]) if "animate" in kw else True,
+            source=str(kw.get("source") or ""),
         ),
         "web_fetch": lambda **kw: web_fetch(
             kw["url"],
