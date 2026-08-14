@@ -113,6 +113,21 @@
       color: #8a3324;
     }
     #hard-reset:hover { background: #f8ece8; border-color: #c2472c; }
+    #spotify-btn {
+      font-weight: 600;
+      border-color: #c8e6d4;
+      color: #0a4f32;
+    }
+    #spotify-btn:hover { background: #e8f5ee; border-color: #0c8f55; }
+    #spotify-btn.linked {
+      background: #e8f5ee;
+      border-color: #0c8f55;
+      color: #0a4f32;
+    }
+    #spotify-btn.needs-setup {
+      border-color: #e4d4bb;
+      color: #8a5a24;
+    }
 
     .meta {
       text-align: right;
@@ -266,6 +281,11 @@
     .msg.user { align-self: flex-end; }
     .msg.bot, .msg.sys { align-self: flex-start; }
     .msg.sys { align-self: center; max-width: 100%; }
+    .msg.has-wide-plot {
+      max-width: 100%;
+      width: 100%;
+      align-self: stretch;
+    }
 
     .msg-label {
       font-size: 0.68rem;
@@ -635,6 +655,10 @@
       overflow: hidden;
       animation: tool-in 420ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
     }
+    .plot-card.is-3d {
+      margin: 0.45rem 0 0.7rem;
+      padding: 0.65rem 0.65rem 0.45rem;
+    }
     .plot-meta {
       display: flex;
       align-items: baseline;
@@ -656,6 +680,10 @@
     .plot-host {
       width: 100%;
       min-height: 320px;
+    }
+    .plot-card.is-3d .plot-host {
+      min-height: min(62vh, 640px);
+      height: min(62vh, 640px);
     }
     .plot-host .modebar { display: none !important; }
     .plot-host .plotly .main-svg { border-radius: 12px; }
@@ -1025,6 +1053,7 @@
     .tool-file_note, .tool-file_by_id { --tool: #0c8f55; }
     .tool-write_json, .tool-create_json, .tool-patch_json, .tool-set_json_path { --tool: #c2472c; }
     .tool-web_search, .tool-web_fetch, .tool-open_chrome, .tool-save_research { --tool: #3d6b8f; }
+    .tool-spotify { --tool: #1db954; }
     .tool-read_json, .tool-read_text, .tool-list_dir, .tool-tree { --tool: #5a7d6a; }
 
     form {
@@ -1088,6 +1117,7 @@
           <select id="mode" title="Mode"></select>
           <button type="button" id="reset">New session</button>
           <button type="button" id="hard-reset" title="Cancel stuck chat/SOI and start a fresh session">Reset AI</button>
+          <button type="button" id="spotify-btn" title="Link Spotify">Spotify</button>
           <button type="button" id="soi">Start SOI</button>
         </div>
       </div>
@@ -1452,6 +1482,7 @@
       image_search: "Image search",
       create_plot: "Plot",
       open_chrome: "Open in Chrome",
+      spotify: "Spotify",
       save_research: "Save research",
       inspect_research: "Inspect research",
       create_cop: "Create content",
@@ -1468,6 +1499,9 @@
       path: "Path",
       dest: "Destination",
       query: "Search",
+      action: "Action",
+      uri: "URI",
+      volume: "Volume",
       url: "Link",
       entry_id: "Entry",
       entry_ids: "Entries",
@@ -2108,6 +2142,15 @@
       });
     }
 
+    function isPlot3d(figure, meta) {
+      const chart = String((meta && meta.chart) || (figure.layout && figure.layout.ainet_chart) || "");
+      if (/surface|isosurface|scatter3d|line3d|mesh3d/i.test(chart)) return true;
+      const data = Array.isArray(figure.data) ? figure.data : [];
+      return data.some((tr) =>
+        tr && /surface|isosurface|scatter3d|mesh3d/i.test(String(tr.type || ""))
+      );
+    }
+
     function renderPlotCard(parent, figure, meta) {
       if (!parent || !figure || typeof figure !== "object") return;
       if (typeof Plotly === "undefined") {
@@ -2117,8 +2160,10 @@
         parent.appendChild(miss);
         return;
       }
+      meta = meta || {};
+      const wide3d = isPlot3d(figure, meta);
       const card = document.createElement("div");
-      card.className = "plot-card";
+      card.className = "plot-card" + (wide3d ? " is-3d" : "");
       const head = document.createElement("div");
       head.className = "plot-meta";
       const title = document.createElement("strong");
@@ -2135,8 +2180,24 @@
       card.appendChild(head);
       card.appendChild(host);
       parent.appendChild(card);
+      if (wide3d) {
+        const msg = parent.closest(".msg");
+        if (msg) msg.classList.add("has-wide-plot");
+        const layout = figure.layout || (figure.layout = {});
+        const hostH = Math.round(Math.min(window.innerHeight * 0.62, 640));
+        layout.height = Math.max(Number(layout.height) || 0, hostH);
+        layout.autosize = true;
+        if (layout.margin) {
+          layout.margin = Object.assign({}, layout.margin, { l: 4, r: 4, t: layout.title ? 48 : 20, b: 4 });
+        }
+      }
       try {
-        animateFigure(host, figure, meta || {});
+        animateFigure(host, figure, meta);
+        if (wide3d && typeof Plotly !== "undefined") {
+          requestAnimationFrame(() => {
+            try { Plotly.Plots.resize(host); } catch (_) {}
+          });
+        }
       } catch (err) {
         host.textContent = "Could not render chart: " + String(err);
       }
@@ -2268,7 +2329,26 @@
       if (Object.prototype.hasOwnProperty.call(s, "soi_running")) {
         setSoiUi(!!s.soi_running);
       }
+      updateSpotifyBtn(s.spotify || {});
       appendSoiLines(s.soi_log || []);
+    }
+
+    function updateSpotifyBtn(sp) {
+      const btn = document.getElementById("spotify-btn");
+      if (!btn) return;
+      btn.classList.remove("linked", "needs-setup");
+      if (sp.connected) {
+        btn.textContent = "Spotify ✓";
+        btn.classList.add("linked");
+        btn.title = "Spotify linked — click to re-authorize";
+      } else if (sp.configured) {
+        btn.textContent = "Link Spotify";
+        btn.title = "Authorize Spotify in the browser";
+      } else {
+        btn.textContent = "Spotify setup";
+        btn.classList.add("needs-setup");
+        btn.title = "Paste Client ID + Secret first (ask in chat or use console)";
+      }
     }
 
     function lineText(row) {
@@ -2598,6 +2678,22 @@
     });
     document.getElementById("hard-reset").addEventListener("click", async () => {
       try { await resetAi(true); } catch (err) { addMessage(asText(err), "sys"); }
+    });
+    document.getElementById("spotify-btn").addEventListener("click", async () => {
+      try {
+        const r = await fetch("/api/spotify/status");
+        const s = await r.json();
+        if (!s.configured) {
+          addMessage(
+            "Spotify needs your Client ID and Client Secret from the Spotify Developer Dashboard. Paste them here in chat (or tell Cursor) and I’ll save them, then click Link Spotify.",
+            "sys"
+          );
+          return;
+        }
+        window.open("/auth/spotify", "_blank", "noopener");
+      } catch (err) {
+        addMessage("Could not reach Spotify status: " + asText(err), "sys");
+      }
     });
 
     soiBtn.addEventListener("click", async () => {

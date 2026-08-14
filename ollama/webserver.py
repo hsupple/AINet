@@ -144,6 +144,12 @@ class ChatApp:
                 },
             }
         base.update(self.tts_status())
+        try:
+            from ainet.tools import spotify as spotify_mod
+
+            base["spotify"] = spotify_mod.connection_status()
+        except Exception as exc:  # noqa: BLE001
+            base["spotify"] = {"ok": False, "configured": False, "connected": False, "error": str(exc)}
         return base
 
     def ask(self, text: str) -> dict[str, Any]:
@@ -208,6 +214,7 @@ class ChatApp:
                         "question",
                         "chart",
                         "equation",
+                        "action",
                         "xlab",
                         "ylab",
                     ):
@@ -556,6 +563,53 @@ def make_handler(app: ChatApp):
                 status, body, ctype = _json_bytes(app.status())
                 self._send(status, body, ctype)
                 return
+            if path == "/api/spotify/status":
+                from ainet.tools import spotify as spotify_mod
+
+                status, body, ctype = _json_bytes(spotify_mod.connection_status())
+                self._send(status, body, ctype)
+                return
+            if path == "/auth/spotify":
+                from ainet.tools import spotify as spotify_mod
+
+                started = spotify_mod.begin_auth()
+                if not started.get("ok"):
+                    self._send(
+                        400,
+                        spotify_mod.auth_error_html(str(started.get("error") or "Not configured")),
+                        "text/html; charset=utf-8",
+                    )
+                    return
+                loc = str(started["url"])
+                self.send_response(302)
+                self._cors()
+                self.send_header("Location", loc)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            if path == "/auth/spotify/callback":
+                from ainet.tools import spotify as spotify_mod
+
+                code = (qs.get("code") or [""])[0]
+                state = (qs.get("state") or [""])[0]
+                err = (qs.get("error") or [""])[0]
+                if err:
+                    self._send(
+                        400,
+                        spotify_mod.auth_error_html(str(err)),
+                        "text/html; charset=utf-8",
+                    )
+                    return
+                result = spotify_mod.finish_auth(code=str(code or ""), state=str(state or ""))
+                if not result.get("ok"):
+                    self._send(
+                        400,
+                        spotify_mod.auth_error_html(str(result.get("error") or "Auth failed")),
+                        "text/html; charset=utf-8",
+                    )
+                    return
+                self._send(200, spotify_mod.auth_success_html(), "text/html; charset=utf-8")
+                return
             if path == "/api/research/current":
                 status, body, ctype = _json_bytes(app.research_current())
                 self._send(status, body, ctype)
@@ -714,6 +768,18 @@ def make_handler(app: ChatApp):
                 status, body, ctype = _json_bytes(
                     app.open_chrome_url(str(data.get("url") or ""), urls=urls)
                 )
+                self._send(status, body, ctype)
+                return
+            if path == "/api/spotify/credentials":
+                from ainet.tools import spotify as spotify_mod
+
+                payload = spotify_mod.save_app_config(
+                    client_id=str(data.get("client_id") or ""),
+                    client_secret=str(data.get("client_secret") or ""),
+                    redirect_uri=str(data.get("redirect_uri") or ""),
+                )
+                code = 200 if payload.get("ok") else 400
+                status, body, ctype = _json_bytes(payload, code)
                 self._send(status, body, ctype)
                 return
             self._send(404, b'{"ok":false,"error":"not found"}', "application/json")

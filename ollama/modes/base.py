@@ -15,6 +15,7 @@ READ_TOOLS = (
     "image_search",
     "create_plot",
     "open_chrome",
+    "spotify",
     "list_projects",
 )
 WRITE_LIGHT = ("patch_json", "set_json_path", "create_json", "write_json", "capture_inbox")

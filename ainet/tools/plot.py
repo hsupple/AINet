@@ -220,11 +220,13 @@ def _normalize_equation(expr: str) -> tuple[str, bool]:
             s = left
         else:
             s = f"({left})-({right})"
-    # Implicit multiply: 2x, 8(x, )( 
+    # Implicit multiply: 2x, )(, 2(, x(, )sin(, 2sin(
     s = re.sub(r"(\d)([xyz])\b", r"\1*\2", s)
     s = re.sub(r"(\))(\()", r"\1*\2", s)
     s = re.sub(r"(\d)\(", r"\1*(", s)
     s = re.sub(r"([xyz])\(", r"\1*(", s)
+    s = re.sub(r"\)([a-zA-Z_])", r")*\1", s)
+    s = re.sub(r"(\d)([a-zA-Z_])", r"\1*\2", s)
     return s, level
 
 

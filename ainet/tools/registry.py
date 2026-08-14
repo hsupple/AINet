@@ -11,6 +11,7 @@ from ainet.tools.permissions import PermissionError_
 from ainet.tools.research import inspect_research, save_research
 from ainet.tools.web import image_search, web_fetch, web_search
 from ainet.tools.plot import create_plot
+from ainet.tools.spotify import spotify
 
 # OAC-safe tools (no general DB mutations). Kept in sync with ollama.modes.base.
 READ_TOOL_NAMES = frozenset(
@@ -24,6 +25,7 @@ READ_TOOL_NAMES = frozenset(
         "image_search",
         "create_plot",
         "open_chrome",
+        "spotify",
         "list_projects",
     }
 )
@@ -586,6 +588,53 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "spotify",
+            "description": (
+                "Control Hayden's Spotify: what's playing, search, play/pause/skip, "
+                "volume, queue, devices. IF not connected -> action=connect (opens login). "
+                "Playback needs an active Spotify app on PC/phone. "
+                "IF play by name -> action=play with query."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": (
+                            "status | connect | now_playing | search | play | pause | "
+                            "next | previous | volume | queue | devices | transfer"
+                        ),
+                        "default": "status",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search text or song/artist to play/queue",
+                    },
+                    "uri": {
+                        "type": "string",
+                        "description": "spotify:track:... (or album/playlist) URI",
+                    },
+                    "device_id": {
+                        "type": "string",
+                        "description": "Target device id (from devices / transfer)",
+                    },
+                    "volume": {
+                        "type": "integer",
+                        "description": "Volume 0-100 (action=volume)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 5,
+                        "description": "Search result count (1-10)",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_fetch",
             "description": (
                 "Fetch a public http(s) URL and return truncated plain text. "
@@ -987,6 +1036,14 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
             n=int(kw["n"]) if kw.get("n") is not None else None,
             animate=bool(kw["animate"]) if "animate" in kw else True,
             source=str(kw.get("source") or ""),
+        ),
+        "spotify": lambda **kw: spotify(
+            str(kw.get("action") or "status"),
+            query=str(kw.get("query") or ""),
+            uri=str(kw.get("uri") or ""),
+            device_id=str(kw.get("device_id") or ""),
+            volume=int(kw["volume"]) if kw.get("volume") is not None else None,
+            limit=int(kw.get("limit", 5)),
         ),
         "web_fetch": lambda **kw: web_fetch(
             kw["url"],

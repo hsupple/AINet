@@ -756,6 +756,8 @@ class ChatSession:
             return base
         if name == "create_plot":
             return str(result.get("summary") or result.get("chart") or "plot")
+        if name == "spotify":
+            return str(result.get("summary") or result.get("action") or "spotify")
         if name == "web_fetch":
             text = result.get("text") or ""
             return f"{len(text)} chars"
@@ -1252,15 +1254,23 @@ class ChatSession:
             elif name == "image_search":
                 limit = max(limit, 5000)
         if name == "create_plot" and isinstance(result, dict):
-            return {
-                "ok": result.get("ok", True),
-                "chart": result.get("chart"),
-                "title": result.get("title"),
-                "series_count": result.get("series_count"),
-                "summary": result.get("summary"),
-                "source": result.get("source"),
-                "note": "Chart rendered in the chat UI.",
-            }
+            ok = bool(result.get("ok", True)) and not result.get("error")
+            slim: dict[str, Any] = {"ok": ok}
+            if result.get("error"):
+                slim["error"] = str(result["error"])[:400]
+                slim["note"] = "Plot failed; tell Hayden it failed. Do not claim a chart was shown."
+                return slim
+            slim.update(
+                {
+                    "chart": result.get("chart"),
+                    "title": result.get("title"),
+                    "series_count": result.get("series_count"),
+                    "summary": result.get("summary"),
+                    "source": result.get("source"),
+                    "note": "Chart rendered in the chat UI.",
+                }
+            )
+            return slim
         if len(raw) <= limit:
             return result
         return {
@@ -1452,6 +1462,7 @@ class ChatSession:
             "image_search",
             "create_plot",
             "open_chrome",
+            "spotify",
             "get_tools",
             "getTools",
             "save_research",
