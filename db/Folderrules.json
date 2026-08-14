@@ -1,7 +1,7 @@
 {
   "version": 1,
   "description": "Rules for AI-created folders and JSON documents under db/.",
-  "domains": ["Hayden", "School", "Work", "Household"],
+  "domains": ["Hayden", "School", "Work", "Household", "Questions"],
   "protected_paths": [
     "Rules.txt",
     "Calendar.json",
@@ -9,7 +9,7 @@
     "Masterlog.json",
     "Hayden/Preferences/Music/Spotify.json"
   ],
-  "immutable_roots": ["Hayden", "School", "Work", "Household", "Projects"],
+  "immutable_roots": ["Hayden", "School", "Work", "Household", "Projects", "Questions"],
   "naming": {
     "folder": "^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$",
     "json_file": "^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}\\.json$",
@@ -65,11 +65,12 @@
       "Projects",
       "Household/Pantry",
       "Household/Maintenance",
-      "Household/History"
+      "Household/History",
+      "Questions"
     ],
     "nested_under_project": true,
     "nested_under_hayden": true,
-    "notes": "Under Hayden/ the AI may create any depth of personal folders/files. New user projects MUST use create_project (Projects/<Name>/ with Read/History/Notes/Plan/Profile) — never a bare create_folder. Under Work/Projects/<Project>/ and inside a focused Projects/<Name>/ the AI may add subfolders and text files. Deep Research briefs live in db/runtime/research/ (host-only; inspect_research only). Chat logs live in db/Chats/ (host-only)."
+    "notes": "Under Hayden/ the AI may create any depth of personal folders/files. Questions/ is a top-level domain for filed Q&A (not under Hayden/). New user projects MUST use create_project (Projects/<Name>/ with Read/History/Notes/Plan/Profile) — never a bare create_folder. Under Work/Projects/<Project>/ and inside a focused Projects/<Name>/ the AI may add subfolders and text files. Deep Research briefs live in db/runtime/research/ (host-only; inspect_research only). Chat logs live in db/Chats/ (host-only)."
   },
   "hayden_map": {
     "Identity": "Core self, sides, personality, voice, boundaries",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from ainet.tools.ops import DatabaseTools
@@ -116,6 +117,29 @@ def format_test_user_message(prompt: str, payload: dict[str, Any]) -> str:
 
 # ---- Phase 2: read refresh payload ----------------------------------------
 
+_RETRIEVAL_ACTION = re.compile(
+    r"\b(ask(?:ed)?|inquir(?:e|ed|y|ies)|request(?:ed)?|find|view|read|list|"
+    r"retrieve|check|look(?:ed|ing)?|search(?:ed|ing)?|confirm(?:ed)?|"
+    r"confirmation|acknowledg(?:e|ed|ment)?|repeat(?:ed)?)\b",
+    re.I,
+)
+_MEMORY_SUBJECT = re.compile(
+    r"\b(preferences?|likes?|dislikes?|questions?|memory|stored information|"
+    r"database|folders?|read\.json|notes?\.json|history\.json)\b",
+    re.I,
+)
+
+
+def _is_retrieval_noise(text: str) -> bool:
+    """True when a source only records asking the AI to retrieve stored data."""
+    value = str(text or "").strip()
+    return bool(
+        value
+        and _RETRIEVAL_ACTION.search(value)
+        and _MEMORY_SUBJECT.search(value)
+    )
+
+
 def _read_folder_jsons(db: DatabaseTools, folder: str, last_updated: str) -> dict[str, Any]:
     """Read every JSON in a folder. History.json is filtered to entries after last_updated."""
     folder_path = db.paths.resolve(folder)
@@ -133,16 +157,103 @@ def _read_folder_jsons(db: DatabaseTools, folder: str, last_updated: str) -> dic
 
         if child.name == "History.json" and isinstance(parsed, dict):
             events = parsed.get("events")
-            if isinstance(events, list) and last_updated:
-                new_events = [
+            if isinstance(events, list):
+                events = [
                     e for e in events
-                    if isinstance(e, dict) and (e.get("timestamp") or "") > last_updated
+                    if isinstance(e, dict)
+                    and not _is_retrieval_noise(str(e.get("content") or ""))
                 ]
-                parsed = {"events": new_events}
+                if last_updated:
+                    events = [
+                        e for e in events
+                        if (e.get("timestamp") or "") > last_updated
+                    ]
+                parsed = {"events": events}
             files[child.name] = parsed
+        elif child.name == "Notes.json" and isinstance(parsed, dict):
+            notes = parsed.get("notes")
+            if isinstance(notes, list):
+                parsed = {
+                    **parsed,
+                    "notes": [
+                        note for note in notes
+                        if not isinstance(note, dict)
+                        or not _is_retrieval_noise(str(note.get("text") or ""))
+                    ],
+                }
+            files[child.name] = parsed
+        elif child.name == "Read.json":
+            # Rebuild from canonical sibling sources. Feeding an old bad digest
+            # back to a small model makes its mistakes self-perpetuating.
+            continue
         else:
+            # Keep specialty leaves even when empty so Phase 2 can patch them
+            # (e.g. Health.json) without inventing new filenames.
             files[child.name] = parsed
     return files
+
+
+_PROTECTED_LEAF_NAMES = frozenset(
+    {
+        "Read.json",
+        "Notes.json",
+        "History.json",
+        "Schedule.json",
+        "Spotify.json",
+        "Captures.json",
+    }
+)
+
+
+def patchable_leaf_names(files: dict[str, Any]) -> list[str]:
+    """Specialty JSON basenames Phase 2 may patch_json (not Notes/History/Read)."""
+    return sorted(
+        name
+        for name in files
+        if name.endswith(".json") and name not in _PROTECTED_LEAF_NAMES
+    )
+
+
+def assert_phase2_patch_path(folder: str, path: str) -> str:
+    """Normalize and validate a Phase 2 patch_json path under folder.
+
+    Returns the normalized relative path. Raises ValueError on reject.
+    """
+    from ainet.tools.paths import normalize_relpath
+
+    folder_n = normalize_relpath(folder)
+    path_n = normalize_relpath(path)
+    if folder_n == ".":
+        raise ValueError("Phase 2 cannot patch at the database root.")
+    if path_n != folder_n and not path_n.startswith(folder_n + "/"):
+        raise ValueError(f"Phase 2 may only write under {folder_n}/ (got {path_n}).")
+    # Direct children only — no nested Music/Spotify.json from Preferences.
+    rel = path_n[len(folder_n) + 1 :] if path_n.startswith(folder_n + "/") else ""
+    if not rel or "/" in rel:
+        raise ValueError(
+            f"Phase 2 patch_json targets must be direct files in {folder_n}/ (got {path_n})."
+        )
+    if rel in _PROTECTED_LEAF_NAMES:
+        raise ValueError(
+            f"Phase 2 cannot patch_json {rel}. "
+            "Use refresh_read for Read.json; leave Notes/History/Schedule alone."
+        )
+    if not rel.endswith(".json"):
+        raise ValueError(f"Phase 2 patch_json requires a .json file (got {path_n}).")
+    return path_n
+
+
+def assert_phase2_read_path(folder: str, read_path: str) -> str:
+    """Normalize and validate refresh_read path for the current Phase 2 folder."""
+    from ainet.tools.paths import normalize_relpath
+
+    folder_n = normalize_relpath(folder)
+    path_n = normalize_relpath(read_path)
+    expected = f"{folder_n}/Read.json"
+    # Allow bare folder path; refresh_read resolves it.
+    if path_n in {folder_n, expected}:
+        return expected
+    raise ValueError(f"Phase 2 refresh_read must target {expected} (got {path_n}).")
 
 
 def build_read_refresh_folders(db: DatabaseTools) -> list[dict[str, Any]]:
@@ -179,9 +290,11 @@ def build_read_refresh_folders(db: DatabaseTools) -> list[dict[str, Any]]:
         if not isinstance(notes_list, list):
             notes_list = []
 
+        patchable = patchable_leaf_names(files)
         folders.append({
             "folder": folder,
             "files": files,
+            "patchable_leaves": patchable,
             "new_entries_since_last_refresh": new_count,
             "notes_count": len(notes_list),
         })
@@ -192,10 +305,40 @@ def build_read_refresh_folders(db: DatabaseTools) -> list[dict[str, Any]]:
 def format_read_refresh_message(prompt: str, folder_payload: dict[str, Any]) -> str:
     """User message for a single folder's phase 2 compaction."""
     lines = [prompt.strip(), ""]
-    lines.append(f"folder: {folder_payload['folder']}")
-    lines.append(f"new_entries_since_last_refresh: {folder_payload['new_entries_since_last_refresh']}")
-    lines.append(f"notes_count: {folder_payload['notes_count']}")
+    folder = folder_payload["folder"]
+    lines.append(f"folder: {folder}")
+    patchable = folder_payload.get("patchable_leaves") or patchable_leaf_names(
+        folder_payload.get("files") or {}
+    )
+    lines.append(
+        "patchable_leaves (use patch_json on these paths only when facts belong): "
+        + (", ".join(f"{folder}/{name}" for name in patchable) if patchable else "(none)")
+    )
     lines.append("")
     lines.append("files:")
     lines.append(json.dumps(folder_payload["files"], ensure_ascii=False, indent=2))
+    lines.append("")
+    lines.append("FINAL TRIAGE BEFORE refresh_read:")
+    lines.append(
+        "- DROP any source item whose only meaning is that Hayden asked to find, "
+        "read, list, view, retrieve, check, or discuss stored information."
+    )
+    lines.append(
+        "- DROP acknowledgments, instructions to the AI, database/file status, "
+        "counts, and missing-data speculation."
+    )
+    lines.append(
+        "- KEEP only concrete facts, tastes, experiences, interests, plans, or "
+        "meaningful unanswered personal questions supported by evidence."
+    )
+    lines.append(
+        "- IF a kept fact belongs in a listed patchable leaf -> patch_json that leaf "
+        "first (set last_updated), then incorporate it into the Read digest."
+    )
+    lines.append(
+        "- active_items are real ongoing actions or plans, not information-retrieval requests."
+    )
+    lines.append(
+        "- If a list has no qualifying evidence, send an empty array. Then call refresh_read once."
+    )
     return "\n".join(lines)

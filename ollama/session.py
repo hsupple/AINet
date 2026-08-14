@@ -57,6 +57,7 @@ _MUTATING = {
     "capture_inbox",
     "file_by_id",
     "file_note",
+    "refresh_read",
 }
 
 _PATH_ARG_KEYS = (
@@ -89,6 +90,8 @@ class ChatSession:
         self.mode_locked = False
         self.full_tools_unlocked = False
         self.project_root: str | None = None
+        # Phase 2 SOI: restrict patch_json / refresh_read to this folder only.
+        self.soi_folder_scope: str | None = None
         self._project_prev_mode: str = "companion"
         self.convo_memory: str = ""
         self.last_user_text: str = ""
@@ -454,13 +457,17 @@ class ChatSession:
         }
         extra_opts = None
         if self.mode.role == "soi":
-            extra_opts = {"temperature": 0, "num_predict": 900}
+            # Phase 2 may emit several leaf patches + refresh_read.
+            predict = 1800 if self.mode.id == "soi_test_p2" else 900
+            extra_opts = {"temperature": 0, "num_predict": predict}
         elif self.mode.id == "deep_research":
             extra_opts = {"temperature": 0.2, "num_predict": 2800}
         max_rounds = self.config.max_tool_rounds
         if self.mode.id == "deep_research":
             max_rounds = max(max_rounds, 16)
             req_timeout = max(req_timeout, 360.0)
+        elif self.mode.id == "soi_test_p2":
+            max_rounds = max(max_rounds, 10)
 
         try:
             for _round in range(max_rounds):
@@ -1407,6 +1414,16 @@ class ChatSession:
                         ),
                     }
 
+        if name == "open_chrome":
+            guard = self._reject_non_web_chrome(args)
+            if guard is not None:
+                return guard
+
+        if self.soi_folder_scope and name in {"patch_json", "refresh_read"}:
+            guard = self._reject_soi_folder_scope(name, args)
+            if guard is not None:
+                return guard
+
         result = dispatch(self.db, name, args)
         if name == "spotify":
             try:
@@ -1426,6 +1443,45 @@ class ChatSession:
         if self.mode.role == "soi":
             result = _redact_assistant_fields(result)
         return result
+
+    @staticmethod
+    def _reject_non_web_chrome(args: dict[str, Any]) -> dict[str, Any] | None:
+        """Chrome opens web pages. Database paths mean the model should just answer."""
+        targets = [str(args.get("url") or "")]
+        raw_urls = args.get("urls")
+        if isinstance(raw_urls, list):
+            targets.extend(str(item or "") for item in raw_urls)
+        targets = [t.strip() for t in targets if t.strip()]
+        if not targets:
+            return None
+        if any(t.lower().startswith(("http://", "https://")) for t in targets):
+            return None
+        return {
+            "ok": False,
+            "error": (
+                "open_chrome is for http(s) web pages only, and this is not one. "
+                "Database files are already readable with read_json or read_text — "
+                "read the file and answer Hayden directly instead of opening anything."
+            ),
+        }
+
+    def _reject_soi_folder_scope(
+        self, name: str, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Phase 2 may only mutate the current folder's specialty leaves + Read.json."""
+        from ollama.filing_payload import assert_phase2_patch_path, assert_phase2_read_path
+
+        folder = str(self.soi_folder_scope or "").strip()
+        if not folder:
+            return None
+        try:
+            if name == "patch_json":
+                assert_phase2_patch_path(folder, str(args.get("path") or ""))
+            elif name == "refresh_read":
+                assert_phase2_read_path(folder, str(args.get("read_path") or ""))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return None
 
     def _prefer_create_project(
         self, name: str, args: dict[str, Any]

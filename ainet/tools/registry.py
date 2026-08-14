@@ -47,13 +47,17 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_dir",
-            "description": "List immediate children of a database folder (relative to db/).",
+            "description": (
+                "path='.' returns every Read.json in the database — use this first to "
+                "find where something about Hayden lives. Any other path lists that "
+                "folder's immediate children."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative folder path. Use '.' for db root.",
+                        "description": "Relative folder path. Use '.' for the whole-database Read.json index.",
                         "default": ".",
                     }
                 },
@@ -420,6 +424,62 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["folder_or_path", "summary"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "refresh_read",
+            "description": (
+                "SOI Phase 2 only: atomically update a folder's compact Read.json digest "
+                "and mark its pending freshness log consumed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "read_path": {
+                        "type": "string",
+                        "description": "Exact Read.json path supplied in the phase-2 payload",
+                    },
+                    "digest": {
+                        "type": "object",
+                        "properties": {
+                            "summary": {"type": "string"},
+                            "state": {"type": "string"},
+                            "important_context": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "recent_changes": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "active_items": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "known_facts": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "uncertainties": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": [
+                            "summary",
+                            "state",
+                            "important_context",
+                            "recent_changes",
+                            "active_items",
+                            "known_facts",
+                            "uncertainties",
+                        ],
+                    },
+                },
+                "required": ["read_path", "digest"],
             },
         },
     },
@@ -1013,6 +1073,7 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
             kw["summary"],
             source_path=kw.get("source_path"),
         ),
+        "refresh_read": lambda **kw: db.refresh_read(kw["read_path"], kw["digest"]),
         "mark_read_refreshed": lambda **kw: db.mark_read_refreshed(kw["read_path"]),
         "list_stale_reads": lambda **kw: db.list_stale_reads(),
         "web_search": lambda **kw: web_search(

@@ -28,12 +28,8 @@ MODE_P2 = Mode(
     prompt=soi_test_prompt.PROMPT_P2,
     tools_enabled=True,
     tool_names=(
-        "list_dir",
-        "tree",
-        "read_json",
-        "write_json",
+        "refresh_read",
         "patch_json",
-        "mark_read_refreshed",
     ),
     role="soi",
     allow_mutations=True,

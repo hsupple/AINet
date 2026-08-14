@@ -32,7 +32,8 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
 
 4. Hayden personal knowledge
    - Hayden/ is the full personal model: Identity, Values, Preferences, Habits, Desires, Relationships, Secrets, Memories, Body, Psychology, Inbox.
-   - Always start at Hayden/Read.json, then open the relevant subtree Read.json (e.g. Relationships/Read.json) before deep files.
+   - Questions/ is a top-level domain (not under Hayden/). Filed science/technical/factual Q&A lives at Questions/Notes.json and Questions/History.json. Never use Hayden/Questions.
+   - Always start at Hayden/Read.json, then open the relevant subtree Read.json (e.g. Relationships/Read.json) before deep files. For "questions I've asked," go to Questions/.
    - People live at Hayden/Relationships/People/<Name>.json (Person template).
    - Multiple sides of Hayden live in Identity/Sides.json — treat sides as real, not contradictions to erase.
    - Goal: know Hayden inside and out. Prefer writing lasting truth into the right leaf file over stuffing Hayden/Read.json.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -51,6 +52,8 @@ class DatabaseTools:
         target = self.paths.resolve(path, must_exist=True)
         if not target.is_dir():
             raise PathError(f"Not a directory: {path}")
+        if target == self.paths.root:
+            return self._list_read_index()
         children = []
         for child in sorted(target.iterdir(), key=lambda p: p.name.lower()):
             if child.name.startswith("."):
@@ -66,6 +69,26 @@ class DatabaseTools:
                 }
             )
         return {"ok": True, "path": path, "children": children}
+
+    def _list_read_index(self) -> dict[str, Any]:
+        """Root listing is the whole-database index: every folder's Read.json."""
+        reads: list[str] = []
+        for candidate in sorted(self.paths.root.rglob("Read.json")):
+            parts = candidate.relative_to(self.paths.root).parts
+            if any(p.startswith(".") for p in parts):
+                continue
+            if any(p.casefold() in {"runtime", "chats"} for p in parts):
+                continue
+            reads.append(self.paths.relative_of(candidate))
+        return {
+            "ok": True,
+            "path": ".",
+            "read_files": reads,
+            "hint": (
+                "Every Read.json in the database. Pick the folder that matches the "
+                "request and read that file."
+            ),
+        }
 
     def tree(self, path: str = ".", max_depth: int = 3) -> dict[str, Any]:
         self.permissions.assert_can(Action.READ, path)
@@ -598,6 +621,48 @@ class DatabaseTools:
             "read_path": norm,
             "needs_update": False,
             "consumed": consumed,
+        }
+
+    def refresh_read(self, read_path: str, digest: dict[str, Any]) -> dict[str, Any]:
+        """Write a compact Read digest and consume its pending freshness log."""
+        norm = normalize_relpath(read_path)
+        if not readlog.is_read_json_path(norm):
+            candidate = f"{norm.rstrip('/')}/Read.json"
+            if self.paths.resolve(candidate).is_file():
+                norm = candidate
+            else:
+                raise PathError(f"No Read.json for: {read_path}")
+        if not isinstance(digest, dict):
+            raise ValueError("refresh_read requires a digest object.")
+
+        list_fields = (
+            "important_context",
+            "recent_changes",
+            "active_items",
+            "known_facts",
+            "uncertainties",
+        )
+        for key in list_fields:
+            if key in digest and not isinstance(digest[key], list):
+                raise ValueError(f"refresh_read digest field '{key}' must be an array.")
+        patch = {
+            "summary": str(digest.get("summary") or "").strip(),
+            "state": str(digest.get("state") or "").strip(),
+            **{key: list(digest.get(key) or []) for key in list_fields},
+            "last_updated": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        }
+        if not patch["summary"] and not any(patch[key] for key in list_fields):
+            raise ValueError("refresh_read digest cannot be entirely empty.")
+
+        written = self.patch_json(norm, patch, summary="Refresh compact Read.json digest")
+        marked = self.mark_read_refreshed(norm)
+        return {
+            "ok": True,
+            "read_path": norm,
+            "updated_fields": sorted(patch),
+            "consumed": marked.get("consumed", 0),
+            "needs_update": False,
+            "write": written,
         }
 
     def list_stale_reads(self) -> dict[str, Any]:

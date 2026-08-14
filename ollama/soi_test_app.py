@@ -124,6 +124,9 @@ class TestSOIWorker(SOIWorker):
             auto_mode=False,
             persist_conversation=False,
         )
+        if is_p2:
+            folder = str(payload.get("folder") or "").strip()
+            session.soi_folder_scope = folder or None
         stats: dict[str, Any] = {"mutating_calls": [], "tool_names": [], "tool_rounds": 0}
 
         def on_tool(phase_str: str, name: str, detail: dict[str, Any]) -> None:

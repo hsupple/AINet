@@ -29,6 +29,7 @@ class IdleSOIWatcher:
         self.error_backoff_s = error_backoff_s
         self._stop = threading.Event()
         self._kick = threading.Event()
+        self._kick_phase: str | None = None
         self._cancel_job = threading.Event()
         self._active = threading.Event()
         self._busy = threading.Lock()
@@ -61,6 +62,19 @@ class IdleSOIWatcher:
         if self.busy:
             return {"started": False, "reason": "already running"}
         self._cancel_job.clear()
+        self._kick_phase = "filing"
+        self._active.set()
+        self._kick.set()
+        return {"started": True}
+
+    def request_read_refresh(self) -> dict[str, bool | str]:
+        """Start Phase 2 Read refresh now — bypasses the automatic idle wait."""
+        if not self.start(force=True):
+            return {"started": False, "reason": "watcher failed to start"}
+        if self.busy:
+            return {"started": False, "reason": "already running"}
+        self._cancel_job.clear()
+        self._kick_phase = "read_refresh"
         self._active.set()
         self._kick.set()
         return {"started": True}
@@ -69,6 +83,7 @@ class IdleSOIWatcher:
         """Stop an in-flight SOI filing/refresh as soon as practical."""
         self._cancel_job.set()
         self._kick.clear()
+        self._kick_phase = None
         worker = self.worker
         if worker is not None:
             try:
@@ -83,6 +98,7 @@ class IdleSOIWatcher:
     def stop(self) -> None:
         self._stop.set()
         self._cancel_job.set()
+        self._kick_phase = None
         self._kick.set()
         self._active.clear()
         worker = self.worker
@@ -107,21 +123,53 @@ class IdleSOIWatcher:
             if self._stop.is_set():
                 break
             kicked = self._kick.is_set()
+            kick_phase = self._kick_phase if kicked else None
             if kicked:
                 self._kick.clear()
+                self._kick_phase = None
             if time.monotonic() < self._next_ok_at and not kicked:
                 continue
             idle = self.session.idle_seconds()
             if not self._busy.acquire(blocking=False):
                 if kicked:
+                    self._kick_phase = kick_phase
                     self._kick.set()
                 continue
             try:
+                worker.cancel_event = self._cancel_job
+
+                # Manual Phase 2 button — do not wait for idle, and do not run filing.
+                if kicked and kick_phase == "read_refresh":
+                    logger.log(
+                        "idle_wake",
+                        phase="read_refresh",
+                        idle_s=idle,
+                        kicked=True,
+                        stale_count=len(worker.list_stale_read_paths()),
+                    )
+                    result = worker.run_read_refresh()
+                    if result.get("cancelled"):
+                        logger.log("read_refresh_skip", reason="cancelled")
+                        continue
+                    if result.get("ran") is False:
+                        logger.log(
+                            "read_refresh_skip",
+                            reason=result.get("reason") or "no work",
+                        )
+                        continue
+                    if not result.get("ok"):
+                        self._next_ok_at = time.monotonic() + self.error_backoff_s
+                        logger.log(
+                            "backoff",
+                            seconds=self.error_backoff_s,
+                            reason=str(result.get("errors") or "read refresh failed"),
+                        )
+                    continue
+
                 # Auto-filing waits for OAC idle; Start SOI (kick) runs immediately.
                 can_file = worker.has_filing_work() and (
                     kicked or idle >= self.config.soi_idle_seconds
                 )
-                worker.cancel_event = self._cancel_job
                 if can_file:
                     logger.log(
                         "idle_wake",
@@ -158,7 +206,6 @@ class IdleSOIWatcher:
                     and worker.needs_read_refresh()
                     and idle >= self.config.soi_read_refresh_idle_seconds
                 ):
-                    worker.cancel_event = self._cancel_job
                     logger.log(
                         "idle_wake",
                         phase="read_refresh",

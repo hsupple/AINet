@@ -489,6 +489,23 @@ class ChatApp:
                 **self.status(),
             }
 
+    def run_soi_phase2(self) -> dict[str, Any]:
+        from ainet.tools.ops import DatabaseTools
+
+        db = DatabaseTools(self.config.db_root)
+        stale = list(db.list_stale_reads().get("paths") or [])
+        kicked = self.watcher.request_read_refresh()
+        with self.lock:
+            return {
+                "ok": True,
+                "started": bool(kicked.get("started")),
+                "reason": kicked.get("reason") or "",
+                "phase": "read_refresh",
+                "stale_reads": stale,
+                "stale_count": len(stale),
+                **self.status(),
+            }
+
     def research_current(self) -> dict[str, Any]:
         from ainet.tools.research import get_current_brief
 
@@ -805,6 +822,10 @@ def make_handler(app: ChatApp):
                 return
             if path == "/api/soi":
                 status, body, ctype = _json_bytes(app.run_soi())
+                self._send(status, body, ctype)
+                return
+            if path == "/api/soi/phase2":
+                status, body, ctype = _json_bytes(app.run_soi_phase2())
                 self._send(status, body, ctype)
                 return
             if path == "/api/open-chrome":

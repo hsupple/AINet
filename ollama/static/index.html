@@ -107,6 +107,13 @@
       font-weight: 600;
     }
     #soi:hover { background: #0a7a48; }
+    #soi-phase2 {
+      font-weight: 600;
+      border-color: #c8d6e6;
+      color: #1f3a5f;
+    }
+    #soi-phase2:hover { background: #eef3f8; border-color: #7a97b8; }
+    #soi-phase2:disabled { opacity: 0.45; cursor: wait; }
     #hard-reset {
       font-weight: 600;
       border-color: #e4c4bb;
@@ -1233,6 +1240,7 @@
           <button type="button" id="hard-reset" title="Cancel stuck chat/SOI and start a fresh session">Reset AI</button>
           <button type="button" id="spotify-btn" title="Link Spotify">Spotify</button>
           <button type="button" id="soi">Start SOI</button>
+          <button type="button" id="soi-phase2" title="Run SOI Phase 2 Read.json refresh now">Start Phase 2</button>
         </div>
       </div>
       <div class="meta" id="meta">Connecting…</div>
@@ -1299,6 +1307,7 @@
     const meta = document.getElementById("meta");
     const modeSel = document.getElementById("mode");
     const soiBtn = document.getElementById("soi");
+    const soiPhase2Btn = document.getElementById("soi-phase2");
     const soiPanel = document.getElementById("soi-panel");
     const workspace = document.getElementById("workspace");
     const sideToggle = document.getElementById("side-toggle");
@@ -2627,6 +2636,7 @@
       soiBtn.classList.toggle("running", !!running);
       soiBtn.classList.toggle("stop-soi", !!running);
       soiBtn.textContent = running ? "Stop SOI" : "Start SOI";
+      if (soiPhase2Btn) soiPhase2Btn.disabled = !!running;
       soiState.classList.toggle("on", !!running);
       soiState.textContent = running ? "Running" : "Idle";
     }
@@ -2976,6 +2986,38 @@
           addMessage("SOI started — Changelog empty, nothing to file yet.", "sys");
         } else {
           addMessage("SOI started — " + pending + " pending changelog entr" + (pending === 1 ? "y" : "ies") + ".", "sys");
+        }
+        appendSoiLines(data.soi_log || data.lines || []);
+        setSoiUi(!!(data.soi_running || data.started));
+      } catch (err) {
+        addMessage(asText(err), "sys");
+        setSoiUi(false);
+      }
+    });
+
+    if (soiPhase2Btn) soiPhase2Btn.addEventListener("click", async () => {
+      if (soiBtn.classList.contains("stop-soi")) return;
+      setSoiUi(true);
+      try {
+        const data = await post("/api/soi/phase2", {});
+        if (!data.ok) {
+          addMessage(asText(data.error || data.reason || "Phase 2 failed to start"), "sys");
+          setSoiUi(false);
+          return;
+        }
+        if (data.started === false) {
+          addMessage(asText(data.reason || "Phase 2 not started"), "sys");
+          setSoiUi(!!data.soi_running);
+          return;
+        }
+        const stale = Number(data.stale_count || 0);
+        if (stale === 0) {
+          addMessage("Phase 2 started — no stale Read.json files right now.", "sys");
+        } else {
+          addMessage(
+            "Phase 2 started — " + stale + " stale Read.json file" + (stale === 1 ? "" : "s") + ".",
+            "sys"
+          );
         }
         appendSoiLines(data.soi_log || data.lines || []);
         setSoiUi(!!(data.soi_running || data.started));

@@ -831,6 +831,9 @@ class SOIWorker:
             persist_conversation=False,
         )
         session.cancel_event = self.cancel_event
+        if phase_for_mode == "read_refresh":
+            folder = str(payload.get("folder") or "").strip()
+            session.soi_folder_scope = folder or None
         self._active_session = session
         stats: dict[str, Any] = {"mutating_calls": [], "tool_names": [], "tool_rounds": 0}
 

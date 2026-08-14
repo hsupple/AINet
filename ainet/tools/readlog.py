@@ -305,13 +305,11 @@ def consume_read_log(data: dict[str, Any]) -> int:
             e["consumed_at"] = _utc_now()
             count += 1
     data["needs_update"] = False
-    # Trim old consumed entries (keep pending + newest consumed)
+    # A successful refresh has incorporated the pending evidence. Read.json is a
+    # hot index, not an audit log; permanent history already lives elsewhere.
     pending = [e for e in data["read_changelog"] if isinstance(e, dict) and e.get("status") == "pending"]
-    consumed = [
-        e for e in data["read_changelog"] if isinstance(e, dict) and e.get("status") == "consumed"
-    ]
     other = [e for e in data["read_changelog"] if not isinstance(e, dict)]
-    data["read_changelog"] = pending + consumed[-_MAX_CONSUMED:] + other
+    data["read_changelog"] = pending + other
     return count
 
 
