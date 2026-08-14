@@ -556,6 +556,13 @@
     .doc-body.md h3 { font-size: 0.98rem; }
     .doc-body.md p { margin: 0.45rem 0; }
     .doc-body.md ul, .doc-body.md ol { margin: 0.4rem 0 0.6rem 1.1rem; }
+    .doc-body.md .katex-display {
+      margin: 0.85rem 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 0.35rem 0;
+    }
+    .doc-body.md .katex { font-size: 1.08em; }
     .doc-sources {
       margin-top: 1.15rem;
       padding-top: 0.85rem;
@@ -937,16 +944,7 @@
         a.setAttribute("rel", "noopener noreferrer");
       });
       try {
-        if (window.renderMathInElement) {
-          renderMathInElement(docPreview, {
-            delimiters: [
-              { left: "$$", right: "$$", display: true },
-              { left: "\\[", right: "\\]", display: true },
-              { left: "\\(", right: "\\)", display: false },
-            ],
-            throwOnError: false,
-          });
-        }
+        renderKatex(docPreview);
       } catch (e) {}
     }
 
@@ -1366,7 +1364,7 @@
       s = s.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => push(tex, false));
       s = s.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) => push(tex, true));
       // Only treat $...$ as math when it doesn't look like leftover currency noise.
-      s = s.replace(/\$([^$\n]{1,80}?)\$/g, (full, tex) => {
+      s = s.replace(/\$([^$\n]{1,400}?)\$/g, (full, tex) => {
         const t = String(tex || "").trim();
         if (!t) return full;
         if (/^\d/.test(t)) return full; // still price-like
@@ -1383,8 +1381,25 @@
         const i = Number(n);
         const item = chunks[i];
         if (!item) return "";
-        const open = item.display ? "$$" : "$";
-        return open + item.tex + open;
+        // Prefer \( \) / \[ \] so KaTeX always sees math even if $ is ignored.
+        if (item.display) return "\\[" + item.tex + "\\]";
+        return "\\(" + item.tex + "\\)";
+      });
+    }
+
+    function renderKatex(el) {
+      if (!el || typeof renderMathInElement !== "function") return;
+      renderMathInElement(el, {
+        delimiters: [
+          { left: "$$", right: "$$", display: true },
+          { left: "\\[", right: "\\]", display: true },
+          { left: "\\(", right: "\\)", display: false },
+          { left: "$", right: "$", display: false },
+        ],
+        throwOnError: false,
+        strict: "ignore",
+        trust: false,
+        ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"],
       });
     }
 
@@ -1423,16 +1438,7 @@
           a.setAttribute("rel", "noopener noreferrer");
         });
         if (typeof renderMathInElement === "function") {
-          renderMathInElement(body, {
-            delimiters: [
-              { left: "$$", right: "$$", display: true },
-              { left: "\\[", right: "\\]", display: true },
-              { left: "\\(", right: "\\)", display: false },
-            ],
-            throwOnError: false,
-            strict: "ignore",
-            trust: false,
-          });
+          renderKatex(body);
         }
         if (nearBottom) logEl.scrollTop = logEl.scrollHeight;
       } catch (e) {
@@ -1673,9 +1679,11 @@
         } else if (ev.type === "done") {
           donePayload = ev;
           const finalReply = asText(ev.reply);
-          if (finalReply) full = finalReply;
-          else if (!full) {
-            full = ev.cancelled ? "(stopped)" : "(empty reply)";
+          const streamed = full.trim();
+          if (!streamed) {
+            full = finalReply || (ev.cancelled ? "(stopped)" : "(empty reply)");
+          } else if (finalReply && finalReply.length > streamed.length) {
+            full = finalReply;
           }
           if (ev.cancelled && full && !/\(stopped\)\s*$/.test(full)) {
             full = full.replace(/\s*$/, "") + "\n\n(stopped)";

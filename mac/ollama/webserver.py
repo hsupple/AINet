@@ -19,11 +19,8 @@ from urllib.parse import parse_qs, urlparse
 
 from ollama.client import OllamaError
 from ollama.config import OllamaConfig
-from ollama.idle import IdleSOIWatcher
 from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
 from ollama.remote import RemoteAinetClient, RemoteError
-from ollama.session import ChatSession
-from ollama.tts import SpeechPipeline, TtsClient, TtsConfig
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
@@ -34,6 +31,9 @@ class ChatApp:
         self.lock = threading.RLock()
         self._soi_seq = 0
         self.soi_log: deque[dict[str, Any]] = deque(maxlen=500)
+        from ollama.idle import IdleSOIWatcher
+        from ollama.session import ChatSession
+
         self.session = ChatSession(
             mode=get_mode(mode_id),
             config=config,
@@ -66,7 +66,9 @@ class ChatApp:
         with self.lock:
             return [row for row in self.soi_log if int(row.get("id") or 0) > after_id]
 
-    def _tts_client(self) -> TtsClient:
+    def _tts_client(self):
+        from ollama.tts import TtsClient, TtsConfig
+
         return TtsClient(
             TtsConfig(
                 url=self.config.tts_url,
@@ -147,6 +149,8 @@ class ChatApp:
         events: queue.Queue[dict[str, Any] | None] = queue.Queue()
         want_voice = bool(voice) and self.config.tts_enabled
         client = self._tts_client()
+        from ollama.tts import SpeechPipeline
+
         pipe: SpeechPipeline | None = None
 
         if want_voice:

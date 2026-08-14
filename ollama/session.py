@@ -326,15 +326,30 @@ class ChatSession:
                 message = response.get("message") or {}
                 self.messages.append(message)
 
+                content = (message.get("content") or "").strip()
                 tool_calls = message.get("tool_calls") or []
                 parsed_from_text = False
                 if not tool_calls:
-                    final_text = (message.get("content") or "").strip()
                     if self.mode.role == "soi":
-                        tool_calls = parse_content_tool_calls(final_text)
+                        tool_calls = parse_content_tool_calls(content)
                         parsed_from_text = bool(tool_calls)
                     if not tool_calls:
+                        piece = split_reply(content)[0] if hide_mem else content
+                        if piece:
+                            if final_text and piece not in final_text:
+                                final_text = final_text.rstrip() + "\n\n" + piece
+                            elif not final_text:
+                                final_text = piece
                         break
+
+                # Preamble before tool calls (math, explanation) must survive the
+                # later "I found a video…" message — don't drop it from the turn.
+                if content and tool_calls and not parsed_from_text:
+                    piece = split_reply(content)[0] if hide_mem else content
+                    if piece and piece not in (final_text or ""):
+                        final_text = (
+                            final_text.rstrip() + "\n\n" + piece if final_text else piece
+                        )
 
                 self.last_tool_rounds += 1
                 if streamed_any and on_token:

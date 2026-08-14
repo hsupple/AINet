@@ -18,17 +18,13 @@ import tempfile
 import threading
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from ollama.client import OllamaClient, OllamaError
 from ollama.config import OllamaConfig
-from ollama.idle import IdleSOIWatcher
-from ollama.soi_log import status_line
 from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
 from ollama.remote import RemoteAinetClient, RemoteError
 from ollama.router import suggest_mode
-from ollama.session import ChatSession
-from ollama.soi_worker import SOIWorker
-from ollama.tts import SpeechPipeline, TtsClient, TtsConfig
 
 
 def _configure_stdio() -> None:
@@ -72,8 +68,9 @@ def _play_wav_bytes(data: bytes) -> None:
                 pass
 
 
-def _chat_turn(session: ChatSession, config: OllamaConfig, line: str, *, voice: bool) -> str:
+def _chat_turn(session: Any, config: OllamaConfig, line: str, *, voice: bool) -> str:
     """Stream tokens to stdout; optionally speak sentence chunks via TTS."""
+    from ollama.tts import SpeechPipeline, TtsClient, TtsConfig
     pipe: SpeechPipeline | None = None
     play_q: queue.Queue[bytes | None] | None = None
     player: threading.Thread | None = None
@@ -432,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
                 return 1
             return 0
+        from ollama.soi_worker import SOIWorker
+
         worker = SOIWorker(config)
         state = None
         if worker.state_path.exists():
@@ -468,6 +467,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(json.dumps(result, indent=2, ensure_ascii=False))
             return 0 if result.get("ok") else 1
+        from ollama.soi_worker import SOIWorker
+
         worker = SOIWorker(config)
         phase = getattr(args, "phase", "auto")
         if phase == "filing":
@@ -495,6 +496,11 @@ def main(argv: list[str] | None = None) -> int:
         if mode.role != "oac":
             print("chat is for OAC flavors (companion/conversation/planner). Use soi-run for SOI.")
             return 2
+        from ollama.idle import IdleSOIWatcher
+        from ollama.session import ChatSession
+        from ollama.soi_log import status_line
+        from ollama.soi_worker import SOIWorker
+
         voice = True if getattr(args, "voice", None) is None else bool(args.voice)
         session = ChatSession(
             mode=mode,

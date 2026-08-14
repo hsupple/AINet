@@ -21,7 +21,8 @@ Workflow (tools first):
 3. save_research ONCE. Required args:
    - title, question, summary
    - body: clean markdown. Write money as USD 500 or \\$500 — never bare $500
-     (it breaks math rendering). Use headings, short paragraphs, bullets.
+     (it breaks math rendering). Wrap inline math in $...$ and display equations
+     in $$...$$. Use headings, short paragraphs, bullets.
    - key_findings: 3–8 short strings
    - sources: array of objects [{{"title":"...","url":"https://..."}}] — at least 2
 4. Reply briefly that the Doc panel shows the brief. Do not paste the whole brief
