@@ -105,7 +105,10 @@ class ChatSession:
         self.session_id: str | None = None
         if self.persist_conversation and mode.role == "oac":
             self.store = ConversationStore(self.config.db_root)
-            self.session_id = self.store.ensure_session(mode_id=mode.id)
+            if resume_session:
+                self.session_id = self.store.ensure_session(mode_id=mode.id)
+            else:
+                self.session_id = self.store.new_session(mode_id=mode.id)
         self._rebuild_system()
         if resume_session and self.store and self.session_id:
             self.convo_memory = self.store.load_memory(self.session_id)
@@ -1405,6 +1408,19 @@ class ChatSession:
                     }
 
         result = dispatch(self.db, name, args)
+        if name == "spotify":
+            try:
+                from ainet.tools.spotify_log import append_spotify_use
+
+                append_spotify_use(
+                    self.db,
+                    ask=str(getattr(self, "_turn_user_text", "") or ""),
+                    args=args,
+                    result=result if isinstance(result, dict) else {"result": result},
+                    session_id=str(self.session_id or ""),
+                )
+            except Exception:
+                pass
         if name == "move_path" and self.project_root and result.get("ok"):
             self._maybe_update_project_root_after_move(result)
         if self.mode.role == "soi":

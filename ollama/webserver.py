@@ -41,6 +41,7 @@ class ChatApp:
             mode=get_mode(mode_id),
             config=config,
             auto_mode=config.auto_mode,
+            resume_session=False,
         )
         self.watcher = IdleSOIWatcher(
             self.session,

@@ -27,7 +27,10 @@ class Action(str, Enum):
 
 
 PROTECTED_READ_ONLY = {"rules.txt"}
-CODE_ONLY_WRITE = {"calendar.json"}
+CODE_ONLY_WRITE = {
+    "calendar.json",
+    "hayden/preferences/music/spotify.json",
+}
 APPEND_ONLY = {"changelog.json", "masterlog.json"}
 _TEXT_EXT = {
     ".txt",
@@ -169,7 +172,7 @@ class Permissions:
 
         if key in CODE_ONLY_WRITE:
             if action != Action.READ:
-                raise PermissionError_("Calendar.json is mutable by code only.")
+                raise PermissionError_(f"{rel} is host-owned. AI may only read it.")
             return
 
         if key in APPEND_ONLY:

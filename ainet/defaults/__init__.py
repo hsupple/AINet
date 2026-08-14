@@ -100,6 +100,15 @@ def load_default_for_path(relative_path: str) -> dict[str, Any] | list[Any] | An
     ):
         return load_default("Captures.json")
 
+    if (
+        len(parts) == 4
+        and parts[0] == "Hayden"
+        and parts[1] == "Preferences"
+        and parts[2] == "Music"
+        and name == "Spotify.json"
+    ):
+        return load_default("Spotify.json")
+
     return load_default(name)
 
 

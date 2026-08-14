@@ -6,7 +6,8 @@
     "Rules.txt",
     "Calendar.json",
     "Changelog.json",
-    "Masterlog.json"
+    "Masterlog.json",
+    "Hayden/Preferences/Music/Spotify.json"
   ],
   "immutable_roots": ["Hayden", "School", "Work", "Household", "Projects"],
   "naming": {

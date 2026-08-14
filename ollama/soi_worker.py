@@ -32,6 +32,7 @@ from ollama.session import ChatSession
 from ollama.soi_log import SOILogger
 
 _FILING_BATCH_SIZE = 4
+_FILING_STREAM_RETRIES = 2
 _SOI_MIN_TOOL_ROUNDS = 6
 _SOI_MAX_HISTORY = 16
 
@@ -66,6 +67,22 @@ def _inbox_for_soi(cap: dict[str, Any]) -> dict[str, Any]:
 
 def _is_ephemeral_entry(entry: dict[str, Any]) -> bool:
     return is_ephemeral_text(_entry_user_text(entry))
+
+
+def _retryable_model_error(err: str | None) -> bool:
+    if not err:
+        return False
+    low = err.lower()
+    return any(
+        token in low
+        for token in (
+            "stream interrupted",
+            "stream non-json",
+            "stream truncated",
+            "timed out",
+            "cannot reach ollama",
+        )
+    )
 
 
 def _add_dest(dest_by_id: dict[str, Any], eid: str, path: str) -> None:
@@ -332,21 +349,41 @@ class SOIWorker:
                 "processed_changelog": len(batch_changelog),
                 "mutating_calls": stats.get("mutating_calls") or [],
             }
-        if err:
-            return {"ok": False, "error": err, "processed_changelog": len(batch_changelog)}
+        while (
+            err
+            and not (stats.get("mutating_calls") or [])
+            and retries < _FILING_STREAM_RETRIES
+            and _retryable_model_error(err)
+            and not self.cancelled()
+        ):
+            retries += 1
+            self.log.log(
+                "model_retry",
+                phase="filing",
+                attempt=retries,
+                max_attempts=_FILING_STREAM_RETRIES,
+                error=err,
+            )
+            reply, err, stats = self._ask_soi(payload)
+            if err == "cancelled" or stats.get("cancelled"):
+                return {
+                    "ok": True,
+                    "cancelled": True,
+                    "processed_changelog": len(batch_changelog),
+                    "mutating_calls": stats.get("mutating_calls") or [],
+                    "retries": retries,
+                }
 
-        # Do not re-ask. Qwen often reprints the same fake upsert JSON instead of
-        # calling tools; host safety nets below file lasting content once.
-
-        narrated: list[dict[str, Any]] = []
-
-        if err and not stats.get("mutating_calls"):
+        # Stream died after tools already ran — keep those placements, don't retry.
+        if err and not (stats.get("mutating_calls") or []):
             return {
                 "ok": False,
                 "error": err,
                 "processed_changelog": len(batch_changelog),
                 "retries": retries,
             }
+
+        narrated: list[dict[str, Any]] = []
 
         entry_ids = [str(e["id"]) for e in batch_changelog if e.get("id")]
         discarded_ids = self._parse_id_list(reply, entry_ids, keys=("discarded", "discarded_ids"))
@@ -818,8 +855,9 @@ class SOIWorker:
                 )
 
         phase = payload.get("phase") or "soi"
-        # Always stream so Stop/Reset can interrupt; soi_think still controls /think.
-        stream = True
+        # Plain non-streaming request — SOI has no live output to render, and the
+        # NDJSON stream reader is the only thing that ever needed interrupting.
+        stream = False
         self.log.log(
             "model_ask",
             phase=phase,
@@ -880,6 +918,9 @@ class SOIWorker:
             self.log.log("model_error", level="info", phase=phase, error="cancelled")
             return None, "cancelled", stats
         except OllamaError as exc:
+            stats["mutating_calls"] = list(getattr(session, "last_mutating_calls", []) or [])
+            stats["tool_names"] = list(getattr(session, "last_tool_names", []) or [])
+            stats["tool_rounds"] = int(getattr(session, "last_tool_rounds", 0) or 0)
             self.log.log("model_error", level="error", phase=phase, error=str(exc))
             return None, str(exc), stats
         finally:

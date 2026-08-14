@@ -41,6 +41,7 @@ class SOILogger:
         "model_reply",
         "model_no_tools",
         "model_error",
+        "model_retry",
         "error",
         "backoff",
         "watcher_start",
@@ -139,6 +140,11 @@ class SOILogger:
             return f"{head}\n{preview}" if preview else head
         if event == "model_error":
             return f"(SOI model error: {fields.get('error', 'unknown')})"
+        if event == "model_retry":
+            return (
+                f"(SOI model retry {fields.get('attempt', '?')}/"
+                f"{fields.get('max_attempts', '?')}: {fields.get('error', 'unknown')})"
+            )
         if event == "idle_wake":
             return (
                 f"(SOI wake: phase={fields.get('phase')} "

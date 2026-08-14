@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import threading
@@ -153,7 +154,11 @@ class OllamaClient:
                     self._active_resp = resp
                 try:
                     if not stream:
-                        body = resp.read().decode("utf-8")
+                        try:
+                            raw_body = resp.read()
+                        except http.client.IncompleteRead as exc:
+                            raw_body = exc.partial
+                        body = raw_body.decode("utf-8", errors="replace")
                         try:
                             return json.loads(body)
                         except json.JSONDecodeError as exc:
@@ -163,6 +168,7 @@ class OllamaClient:
                         on_token=on_token,
                         on_thinking=on_thinking,
                         should_cancel=should_cancel,
+                        timeout_s=wait,
                     )
                 finally:
                     with self._active_lock:
@@ -193,20 +199,6 @@ class OllamaClient:
             return True
         return "timed out" in str(reason).lower()
 
-    @staticmethod
-    def _set_read_timeout(resp: Any, seconds: float) -> None:
-        """Wake blocked stream reads periodically so cancel can be honored."""
-        try:
-            fp = getattr(resp, "fp", None)
-            raw = getattr(fp, "raw", None) if fp is not None else None
-            sock = getattr(raw, "_sock", None) if raw is not None else None
-            if sock is None and fp is not None:
-                sock = getattr(fp, "_sock", None)
-            if sock is not None:
-                sock.settimeout(seconds)
-        except Exception:
-            pass
-
     def _consume_stream(
         self,
         resp: Any,
@@ -214,26 +206,32 @@ class OllamaClient:
         on_token: TokenCallback | None = None,
         on_thinking: ThinkingCallback | None = None,
         should_cancel: Callable[[], bool] | None = None,
+        timeout_s: float | None = None,
     ) -> dict[str, Any]:
-        """Read NDJSON chat stream; accumulate final message (incl. tool_calls)."""
+        """Read NDJSON chat stream; accumulate final message (incl. tool_calls).
+
+        Reads block at the socket timeout set by urlopen. Cancel arrives via
+        cancel_active(), which shuts the socket down and breaks the read.
+        """
         role = "assistant"
         content_parts: list[str] = []
         thinking_parts: list[str] = []
         tool_calls: list[dict[str, Any]] = []
         meta: dict[str, Any] = {}
-        self._set_read_timeout(resp, 1.0)
+        wait = float(self.config.timeout_s if timeout_s is None else timeout_s)
+        stream_done = False
 
-        while True:
+        while not stream_done:
             if should_cancel and should_cancel():
-                try:
-                    resp.close()
-                except Exception:
-                    pass
                 raise OllamaCancelled("Cancelled")
             try:
                 raw = resp.readline()
-            except socket.timeout:
-                continue
+            except (TimeoutError, socket.timeout) as exc:
+                raise OllamaError(
+                    f"Ollama timed out after {wait:.0f}s (host={self.config.host})"
+                ) from exc
+            except http.client.IncompleteRead:
+                break
             except (OSError, ValueError) as exc:
                 if should_cancel and should_cancel():
                     raise OllamaCancelled("Cancelled") from exc
@@ -285,6 +283,7 @@ class OllamaClient:
                 ):
                     if key in chunk:
                         meta[key] = chunk[key]
+                stream_done = True
 
         message: dict[str, Any] = {
             "role": role,

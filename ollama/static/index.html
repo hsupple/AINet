@@ -3025,16 +3025,16 @@
     }
 
     refreshStatus();
-    loadChats().then(async () => {
-      if (!currentChatId) return;
+    (async () => {
       try {
-        const r = await fetch("/api/chats?id=" + encodeURIComponent(currentChatId));
-        const payload = await r.json();
-        if (payload && payload.ok && payload.chat && (payload.chat.turns || []).length) {
-          replayChatTurns(payload.chat.turns);
+        const data = await post("/api/reset", { hard: false }, 5000);
+        if (data && data.ok) {
+          logEl.innerHTML = "";
+          renderMeta(data);
         }
       } catch (e) {}
-    });
+      await loadChats();
+    })();
     pullSoiLog();
     connectSoiStream();
     setInterval(refreshStatus, 8000);

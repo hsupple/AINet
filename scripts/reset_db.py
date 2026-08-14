@@ -169,6 +169,7 @@ SEED_FILES = (
     "Hayden/Preferences/Lifestyle.json",
     "Hayden/Preferences/Likes.json",
     "Hayden/Preferences/Media.json",
+    "Hayden/Preferences/Music/Spotify.json",
     "Hayden/Preferences/Notes.json",
     "Hayden/Preferences/Read.json",
     "Hayden/Profile.json",
@@ -404,7 +405,12 @@ def _reset_json_file(root: Path, path: Path, plan: ResetPlan, *, dry_run: bool) 
     name = path.name
     if name in KEEP_ROOT_FILES or rel in KEEP_ROOT_FILES:
         return
-    if rel in {"Changelog.json", "Masterlog.json", "Calendar.json"}:
+    if rel in {
+        "Changelog.json",
+        "Masterlog.json",
+        "Calendar.json",
+        "Hayden/Preferences/Music/Spotify.json",
+    }:
         return
 
     def write_template() -> None:

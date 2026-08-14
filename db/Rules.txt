@@ -13,6 +13,7 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
 2. Protected files
    - Rules.txt: AI may read. AI must never write, rename, move, or delete.
    - Calendar.json: AI may read. Writes are code-only (scheduler/system), never AI tools.
+   - Hayden/Preferences/Music/Spotify.json: host log of every Spotify tool call (Hayden's ask, time, full args + result). AI may read. Never write, rename, move, or delete.
    - Changelog.json: pending OAC→SOI queue only. AI must not rewrite. Tool writes and filed/discarded turns are appended to Masterlog.json (kept forever).
    - Masterlog.json: append-only permanent archive of filed/discarded oac_turns (full user_text/assistant_text + filed_to). Never delete or rewrite. AI may read.
 

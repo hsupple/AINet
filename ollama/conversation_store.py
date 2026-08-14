@@ -63,6 +63,7 @@ class ConversationStore:
                 pass
 
     def new_session(self, *, mode_id: str, topic: str | None = None) -> str:
+        self._drop_empty_session(self.current_session_id())
         session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
         data = {
             "id": session_id,
@@ -250,6 +251,22 @@ class ConversationStore:
             "preview": preview[:120],
             "current": sid == current,
         }
+
+    def _drop_empty_session(self, session_id: str | None) -> None:
+        """Remove a current chat that never got a turn so reopen does not pile empties."""
+        if not session_id or not self.session_exists(session_id):
+            return
+        try:
+            data = self.load_session(session_id)
+        except (OSError, json.JSONDecodeError, FileNotFoundError, ValueError):
+            return
+        turns = data.get("turns") if isinstance(data.get("turns"), list) else []
+        if turns:
+            return
+        try:
+            (self.sessions_dir / f"{_safe_session_id(session_id)}.json").unlink()
+        except OSError:
+            pass
 
     def set_current(self, session_id: str) -> None:
         self._set_current(session_id)

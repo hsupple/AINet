@@ -75,6 +75,8 @@ IF Hayden asks about music, what's playing, play/pause/skip, volume, or queue ->
 IF not connected -> action=connect (opens Spotify login), then wait for Hayden to finish.
 IF play by song/artist name -> action=play with query.
 IF no active device error -> tell Hayden to open the Spotify app on PC or phone first.
+The host logs every spotify call to Hayden/Preferences/Music/Spotify.json (read-only).
+IF Hayden asks what was played or recent Spotify requests -> read that file.
 """.strip()
 
 OAC_RULES = """

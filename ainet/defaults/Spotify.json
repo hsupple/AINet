@@ -1,0 +1,10 @@
+{
+  "_ainet": {
+    "doc": "Spotify.json",
+    "role": "Host-owned append-only log of every Spotify tool call. AI may read; only the host writes.",
+    "edit": "Seed empty. Host appends {id, ts, ask, session_id, tool, args, result}."
+  },
+  "description": "Host log of every Spotify tool call. AI may read; only the host appends.",
+  "last_updated": "",
+  "entries": []
+}
