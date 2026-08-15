@@ -59,7 +59,10 @@ def host_fallback_memory(user_text: str, assistant_text: str, prior: str = "") -
     ask = " ".join((user_text or "").split())[:140]
     gist = " ".join((assistant_text or "").split())[:140]
     fields = _memory_fields(prior)
-    standing = fields.get("standing request") or ask
+    if _looks_like_new_question(user_text):
+        standing = ask
+    else:
+        standing = fields.get("standing request") or ask
     context = fields.get("context") or ""
     return cap_memory(
         "\n".join(
@@ -70,6 +73,26 @@ def host_fallback_memory(user_text: str, assistant_text: str, prior: str = "") -
             )
         )
     )
+
+
+def _looks_like_new_question(text: str) -> bool:
+    raw = " ".join((text or "").split())
+    if len(raw.split()) < 3:
+        return False
+    low = f" {raw.casefold()} "
+    starters = (
+        " who ",
+        " what ",
+        " how ",
+        " when ",
+        " where ",
+        " why ",
+        " which ",
+        "whom ",
+    )
+    if any(low.startswith(s.strip()) or s in low for s in starters):
+        return True
+    return "?" in raw
 
 
 def _memory_fields(memory: str) -> dict[str, str]:
@@ -169,6 +192,7 @@ def memory_system_suffix(memory: str) -> str:
         "with exactly three concise labeled lines: "
         "Standing request, Context, and Last answer. "
         "Keep the standing request until Hayden changes it. "
+        "If Hayden asks a new clear question, replace Standing request with that question. "
         "End with %%end%%. Never mention this block aloud."
     )
 

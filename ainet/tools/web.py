@@ -275,31 +275,57 @@ def _http_get(
     max_bytes: int | None = None,
 ) -> tuple[bytes, str]:
     cap = _FETCH_BYTE_CAP if max_bytes is None else max(1024, int(max_bytes))
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": _USER_AGENT,
-            "Accept": "*/*",
-            **(headers or {}),
-        },
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-            data = resp.read(cap + 1)
-            if len(data) > cap:
-                data = data[:cap]
-            return data, ctype
-    except urllib.error.HTTPError as exc:
-        body = ""
+    current = (url or "").strip()
+    if not current:
+        raise ValueError("url is required")
+    last_err = ""
+    seen: set[str] = set()
+    for _ in range(8):
+        if current in seen:
+            raise ValueError(f"Redirect loop for {url}")
+        seen.add(current)
+        req = urllib.request.Request(
+            current,
+            headers={
+                "User-Agent": _USER_AGENT,
+                "Accept": "*/*",
+                **(headers or {}),
+            },
+            method="GET",
+        )
         try:
-            body = exc.read(400).decode("utf-8", errors="replace")
-        except Exception:
-            pass
-        raise ValueError(f"HTTP {exc.code} for {url}: {_clip(body, 200) or exc.reason}") from exc
-    except urllib.error.URLError as exc:
-        raise ValueError(f"Network error fetching {url}: {exc.reason}") from exc
+            # Don't auto-follow: some hosts return 302 without a clean redirect chain
+            # that urllib's default handler treats as an error. We resolve Location ourselves.
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPHandler(),
+                urllib.request.HTTPSHandler(),
+            )
+            with opener.open(req, timeout=timeout) as resp:
+                ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                data = resp.read(cap + 1)
+                if len(data) > cap:
+                    data = data[:cap]
+                return data, ctype
+        except urllib.error.HTTPError as exc:
+            if exc.code in {301, 302, 303, 307, 308}:
+                loc = (exc.headers.get("Location") or "").strip()
+                try:
+                    exc.read()
+                except Exception:
+                    pass
+                if loc:
+                    current = urllib.parse.urljoin(current, loc)
+                    continue
+            body = ""
+            try:
+                body = exc.read(400).decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            last_err = f"HTTP {exc.code} for {current}: {_clip(body, 200) or exc.reason}"
+            raise ValueError(last_err) from exc
+        except urllib.error.URLError as exc:
+            raise ValueError(f"Network error fetching {current}: {exc.reason}") from exc
+    raise ValueError(f"Too many redirects for {url}" + (f" ({last_err})" if last_err else ""))
 
 
 class _TextExtractor(HTMLParser):
@@ -531,7 +557,14 @@ def web_fetch(url: str, max_chars: int = _FETCH_DEFAULT_CHARS) -> dict[str, Any]
         raise ValueError("max_chars must be an integer") from exc
     limit = max(200, min(_FETCH_MAX_CHARS, limit))
 
-    data, ctype = _http_get(target)
+    data, ctype = _http_get(
+        target,
+        headers={
+            "User-Agent": _BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
     # charset guess: utf-8 default
     text = data.decode("utf-8", errors="replace")
     if ctype in {"text/html", "application/xhtml+xml"} or (
@@ -549,6 +582,7 @@ def web_fetch(url: str, max_chars: int = _FETCH_DEFAULT_CHARS) -> dict[str, Any]
     return {
         "ok": True,
         "url": target,
+        "final_url": target,
         "content_type": ctype or "unknown",
         "chars": len(body),
         "truncated": truncated,

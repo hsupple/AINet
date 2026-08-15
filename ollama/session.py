@@ -723,6 +723,25 @@ class ChatSession:
                 else:
                     self.messages.append({"role": "assistant", "content": final_text})
 
+        if (
+            hide_mem
+            and self.mode.role == "oac"
+            and self._turn_had_web_evidence()
+            and self._looks_like_stale_clarifier(final_text or "", user_text)
+        ):
+            retry = self._retry_answer_after_web(
+                user_text,
+                stream=stream,
+                on_token=on_token,
+                on_thinking=on_thinking,
+                think=think,
+                req_timeout=req_timeout,
+                vis_filter=vis_filter,
+            )
+            if retry:
+                final_text = retry
+                streamed_parts = [retry]
+
         if vis_filter is not None:
             vis_filter.flush()
         if hide_mem:
@@ -781,6 +800,92 @@ class ChatSession:
             args = {}
         return name, args if isinstance(args, dict) else {}
 
+    def _turn_had_web_evidence(self) -> bool:
+        names = set(getattr(self, "last_tool_names", []) or [])
+        return bool(names & {"web_search", "web_fetch"})
+
+    @staticmethod
+    def _looks_like_stale_clarifier(reply: str, user_text: str) -> bool:
+        low = (reply or "").casefold()
+        if not low.strip():
+            return False
+        ask = (user_text or "").strip()
+        clear_ask = len(ask.split()) >= 3 and (
+            "?" in ask
+            or ask.casefold().startswith(
+                ("who ", "what ", "how ", "when ", "where ", "why ", "which ")
+            )
+        )
+        if not clear_ask:
+            return False
+        markers = (
+            "too vague",
+            "could you please specify",
+            "please specify what",
+            "would you like me to search",
+            "let me try a different approach",
+            "what you are referring to",
+        )
+        return any(m in low for m in markers)
+
+    def _retry_answer_after_web(
+        self,
+        user_text: str,
+        *,
+        stream: bool,
+        on_token: TokenCallback | None,
+        on_thinking: ThinkingCallback | None,
+        think: bool,
+        req_timeout: float,
+        vis_filter: VisibleTokenFilter | None,
+    ) -> str:
+        """One forced answer pass when the model ignored successful web evidence."""
+        # Drop the bad assistant turn if it is still the last message.
+        if self.messages and self.messages[-1].get("role") == "assistant":
+            self.messages.pop()
+        self.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Host note: web_search already returned results/fetched page text for "
+                    f"this question: {user_text!r}. "
+                    "Answer that question now from the tool results already in this turn. "
+                    "Do not ask clarifying questions. Do not say the topic is vague."
+                ),
+            }
+        )
+        try:
+            if stream and (on_token is not None or on_thinking is not None):
+
+                def _tok(delta: str) -> None:
+                    if vis_filter is not None:
+                        vis_filter.feed(delta)
+                    elif on_token is not None:
+                        on_token(delta)
+
+                response = self.client.chat_stream(
+                    self.messages,
+                    tools=None,
+                    think=think,
+                    timeout_s=req_timeout,
+                    on_token=_tok if on_token is not None else None,
+                    on_thinking=on_thinking,
+                )
+            else:
+                response = self.client.chat(
+                    self.messages,
+                    tools=None,
+                    think=think,
+                    timeout_s=req_timeout,
+                )
+        except Exception:
+            return ""
+        message = response.get("message") or {}
+        self.messages.append(message)
+        content = str(message.get("content") or "")
+        visible, _mem = split_reply(content)
+        return (visible or content).strip()
+
     @staticmethod
     def _tool_call_key(name: str, args: dict[str, Any]) -> str:
         try:
@@ -807,6 +912,10 @@ class ChatSession:
             opened = result.get("auto_opened")
             if isinstance(opened, list) and opened:
                 base += f" · opened {len(opened)}"
+            fetched = result.get("fetched")
+            if isinstance(fetched, list) and fetched:
+                ok_n = sum(1 for row in fetched if isinstance(row, dict) and row.get("text"))
+                base += f" · fetched {ok_n}"
             return base
         if name == "image_search":
             n = result.get("count")
@@ -1091,11 +1200,51 @@ class ChatSession:
         if not ok:
             return search_result
 
+        from ainet.tools.web import web_fetch
+
+        fetched: list[dict[str, str]] = []
+        for pick in cards[:2]:
+            url = str(pick.get("url") or "")
+            if not url.startswith("http"):
+                continue
+            try:
+                page = web_fetch(url, max_chars=2800)
+            except Exception as exc:  # noqa: BLE001
+                fetched.append(
+                    {
+                        "title": str(pick.get("title") or ""),
+                        "url": url,
+                        "error": str(exc)[:200],
+                    }
+                )
+                continue
+            if not isinstance(page, dict) or not page.get("ok"):
+                fetched.append(
+                    {
+                        "title": str(pick.get("title") or ""),
+                        "url": url,
+                        "error": str((page or {}).get("error") or "fetch failed")[:200],
+                    }
+                )
+                continue
+            fetched.append(
+                {
+                    "title": str(pick.get("title") or page.get("title") or ""),
+                    "url": url,
+                    "text": str(page.get("text") or "")[:2800],
+                }
+            )
+
         out = dict(search_result)
         out["auto_opened"] = cards
+        if fetched:
+            out["fetched"] = fetched
         out["hint"] = (
-            f"Host already opened {len(cards)} URL(s) in Chrome (see auto_opened). "
-            "Do not claim other tabs opened unless you call open_chrome."
+            f"Host already opened {len(cards)} URL(s) in Chrome (see auto_opened) "
+            f"and fetched page text (see fetched). "
+            "Answer Hayden NOW from snippets + fetched. "
+            "Do not ask clarifying questions. Do not ask whether to search again. "
+            "Do not reuse an earlier 'too vague / please specify' reply."
         )
         return out
 
@@ -1334,8 +1483,43 @@ class ChatSession:
                 }
             )
             return slim
+        # Keep search + auto-fetched page text intact for OAC answers.
+        if name == "web_search" and self.mode.role == "oac":
+            limit = max(limit, 9000)
+        if name == "web_fetch" and self.mode.role == "oac":
+            limit = max(limit, 5000)
         if len(raw) <= limit:
             return result
+        if name == "web_search" and isinstance(result, dict):
+            slim = {
+                "ok": result.get("ok", True),
+                "query": result.get("query"),
+                "count": result.get("count"),
+                "provider": result.get("provider"),
+                "hint": result.get("hint"),
+                "results": (result.get("results") or [])[:5],
+                "auto_opened": result.get("auto_opened"),
+                "fetched": result.get("fetched"),
+                "truncated": True,
+            }
+            slim_raw = json.dumps(slim, ensure_ascii=False)
+            if len(slim_raw) <= limit:
+                return slim
+            # Drop fetched bodies last if still too large.
+            fetched = slim.get("fetched")
+            if isinstance(fetched, list):
+                slim["fetched"] = [
+                    {
+                        "title": row.get("title"),
+                        "url": row.get("url"),
+                        "text": str(row.get("text") or "")[:1200],
+                        "error": row.get("error"),
+                    }
+                    if isinstance(row, dict)
+                    else row
+                    for row in fetched[:2]
+                ]
+            return slim
         return {
             "ok": result.get("ok", True),
             "truncated": True,
