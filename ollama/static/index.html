@@ -1447,6 +1447,7 @@
 
     function replayChatTurns(turns) {
       logEl.innerHTML = "";
+      clearEspTurns();
       if (!turns || !turns.length) {
         addMessage("This chat is empty.", "sys");
         return;
@@ -2560,12 +2561,21 @@
       const hangHtml = bits.length
         ? "<br><span style=\"color:var(--danger)\">" + escapeHtml(bits.join(" · ")) + "</span>"
         : "";
+      const esp = s.esp32 || {};
+      const stt = esp.stt || {};
+      let espLine = "";
+      if (esp.connected) espLine = "<br>ESP32 mic live";
+      else if (esp.ping_ok) espLine = "<br>ESP32 ping";
+      else if (esp.streaming) espLine = "<br>ESP32 connecting";
+      if (stt.ready && espLine) espLine += " · STT " + escapeHtml(stt.model || "on");
+      else if (espLine && stt.error) espLine += "<br><span style=\"color:var(--danger)\">STT " + escapeHtml(String(stt.error).slice(0, 90)) + "</span>";
       meta.innerHTML =
         "<strong>" + (s.model || "?") + "</strong><br>" +
         "mode " + (s.mode || "?") +
         (s.project_name ? "<br>project " + s.project_name : "") +
         (s.session_id ? "<br>session " + s.session_id.slice(0, 8) : "") +
         (s.soi_running ? "<br>SOI running" : "<br>SOI idle") +
+        espLine +
         hangHtml;
       if (Array.isArray(s.modes) && modeSel.options.length === 0) {
         for (const m of s.modes) {
@@ -2657,6 +2667,35 @@
           appendSoiLines(s.lines || []);
           if (Object.prototype.hasOwnProperty.call(s, "soi_running")) {
             setSoiUi(!!s.soi_running);
+          }
+        }
+      } catch (e) {}
+    }
+
+    const espTurns = new Map();
+    function clearEspTurns() {
+      espTurns.clear();
+    }
+    async function pullEsp32() {
+      try {
+        const r = await fetch("/api/esp32/status");
+        const s = await r.json();
+        if (!s || !s.ok) return;
+        for (const t of s.turns || []) {
+          const id = Number(t.id || 0);
+          if (!id) continue;
+          let rec = espTurns.get(id);
+          if (!rec) {
+            rec = {
+              user: addMessage(t.text || "", "user"),
+              bot: addMessage(t.reply || (t.status === "asking" ? "…" : ""), "bot"),
+            };
+            espTurns.set(id, rec);
+          }
+          if (rec.bot && rec.bot._body) {
+            if (t.error) rec.bot._body.textContent = String(t.error);
+            else if (t.reply) rec.bot._body.textContent = t.reply;
+            else if (t.status === "asking") rec.bot._body.textContent = "…";
           }
         }
       } catch (e) {}
@@ -2823,6 +2862,7 @@
       setChatBusy(false);
       chatAbort = null;
       logEl.innerHTML = "";
+      clearEspTurns();
       setSoiUi(false);
     }
 
@@ -2866,6 +2906,7 @@
       }
       if (data && data.ok) {
         logEl.innerHTML = "";
+        clearEspTurns();
         addMessage("New chat", "sys");
         renderMeta(data);
         await loadChats();
@@ -3072,6 +3113,7 @@
         const data = await post("/api/reset", { hard: false }, 5000);
         if (data && data.ok) {
           logEl.innerHTML = "";
+          clearEspTurns();
           renderMeta(data);
         }
       } catch (e) {}
@@ -3079,7 +3121,9 @@
     })();
     pullSoiLog();
     connectSoiStream();
+    pullEsp32();
     setInterval(refreshStatus, 8000);
+    setInterval(pullEsp32, 700);
     // Only poll when the stream is down — a standing SSE plus a poll can starve
     // the browser's per-origin connection pool if a chat stream wedges.
     setInterval(() => { if (!soiStreamOk) pullSoiLog(); }, 1500);

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import queue
+import socket
 import threading
 import time
 from collections import deque
@@ -19,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ollama.client import OllamaCancelled, OllamaClient, OllamaError
 from ollama.config import OllamaConfig
+from ollama.esp32_hub import Esp32Hub
 from ollama.idle import IdleSOIWatcher
 from ollama.inference_gate import INFERENCE_GATE
 from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
@@ -50,6 +52,8 @@ class ChatApp:
         )
         if config.soi_enabled:
             self.watcher.start()
+        self.esp32 = Esp32Hub(on_utterance=self._on_esp32_utterance)
+        self.esp32.start()
 
     def _append_raw(self, *, source: str, **fields: Any) -> None:
         row = {k: v for k, v in fields.items() if v is not None}
@@ -145,6 +149,7 @@ class ChatApp:
                 },
             }
         base.update(self.tts_status())
+        base["esp32"] = self.esp32.snapshot(include_turns=False)
         try:
             from ainet.tools import spotify as spotify_mod
 
@@ -180,6 +185,13 @@ class ChatApp:
             return payload
         except OllamaError as exc:
             return {"ok": False, "error": str(exc)}
+
+    def _on_esp32_utterance(self, text: str) -> str:
+        result = self.ask(text)
+        if result.get("ok"):
+            return str(result.get("reply") or "")
+        err = str(result.get("error") or "ask failed")
+        raise RuntimeError(err)
 
     def ask_stream(self, text: str, *, voice: bool = False) -> Iterator[dict[str, Any]]:
         """Yield SSE payloads: token / tool_* / done / error. Voice/TTS is disabled."""
@@ -423,6 +435,7 @@ class ChatApp:
                 self.session.reset()
             self.session.clear_cancel()
             self._last_error = None
+            self.esp32.clear_turns()
             self._append_raw(
                 source="sys",
                 event="hard_reset" if hard else "reset",
@@ -537,6 +550,7 @@ class ChatApp:
 
     def shutdown(self) -> None:
         self.watcher.stop()
+        self.esp32.stop()
 
 
 def _json_bytes(payload: dict[str, Any], status: int = 200) -> tuple[int, bytes, str]:
@@ -606,6 +620,19 @@ def make_handler(app: ChatApp):
                     return
             if path == "/api/status":
                 status, body, ctype = _json_bytes(app.status())
+                self._send(status, body, ctype)
+                return
+            if path == "/api/esp32/ping":
+                peer = self.client_address[0] if self.client_address else ""
+                status, body, ctype = _json_bytes(app.esp32.ping(peer))
+                self._send(status, body, ctype)
+                return
+            if path == "/api/esp32/status":
+                try:
+                    after = int((qs.get("after") or ["0"])[0] or 0)
+                except ValueError:
+                    after = 0
+                status, body, ctype = _json_bytes(app.esp32.snapshot(after))
                 self._send(status, body, ctype)
                 return
             if path == "/api/chats":
@@ -757,6 +784,9 @@ def make_handler(app: ChatApp):
 
         def _do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path == "/api/esp32/audio":
+                self._handle_esp32_audio()
+                return
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
             try:
@@ -850,7 +880,99 @@ def make_handler(app: ChatApp):
                 return
             self._send(404, b'{"ok":false,"error":"not found"}', "application/json")
 
+        def _handle_esp32_audio(self) -> None:
+            try:
+                rate = int(self.headers.get("X-Sample-Rate") or 16000)
+            except ValueError:
+                rate = 16000
+            peer = self.client_address[0] if self.client_address else ""
+            try:
+                self.connection.settimeout(None)
+            except Exception:
+                pass
+            app.esp32.begin_stream(peer=peer, sample_rate=rate)
+            got = 0
+            try:
+                for chunk in _iter_request_body(self):
+                    got += len(chunk)
+                    app.esp32.feed_pcm(chunk, sample_rate=rate)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                pass
+            finally:
+                app.esp32.end_stream()
+            status, body, ctype = _json_bytes({"ok": True, "bytes": got})
+            try:
+                self._send(status, body, ctype)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                pass
+
     return Handler
+
+
+def _iter_request_body(handler: BaseHTTPRequestHandler) -> Iterator[bytes]:
+    te = (handler.headers.get("Transfer-Encoding") or "").lower()
+    if "chunked" in te:
+        while True:
+            line = handler.rfile.readline()
+            if not line:
+                return
+            line = line.strip()
+            if not line:
+                continue
+            size_s = line.split(b";", 1)[0]
+            try:
+                size = int(size_s, 16)
+            except ValueError:
+                return
+            if size <= 0:
+                handler.rfile.readline()
+                return
+            remaining = size
+            while remaining:
+                piece = handler.rfile.read(min(remaining, 4096))
+                if not piece:
+                    return
+                remaining -= len(piece)
+                yield piece
+            handler.rfile.read(2)
+        return
+    try:
+        length = int(handler.headers.get("Content-Length") or 0)
+    except ValueError:
+        length = 0
+    if length > 0:
+        remaining = length
+        while remaining > 0:
+            piece = handler.rfile.read(min(remaining, 4096))
+            if not piece:
+                return
+            remaining -= len(piece)
+            yield piece
+        return
+    while True:
+        piece = handler.rfile.read(4096)
+        if not piece:
+            return
+        yield piece
+
+
+def _lan_ips() -> list[str]:
+    found: list[str] = []
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))
+        found.append(sock.getsockname()[0])
+        sock.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and ip not in found:
+                found.append(ip)
+    except OSError:
+        pass
+    return found
 
 
 def serve(
@@ -866,9 +988,13 @@ def serve(
     handler = make_handler(app)
     httpd = ThreadingHTTPServer((host, port), handler)
     public = (os.environ.get("AINET_PUBLIC_URL") or "").strip().rstrip("/")
+    lan = _lan_ips()
+    lan_note = ", ".join(f"http://{ip}:{port}/" for ip in lan) or "http://<this-pc-ip>:1111/"
     print(
         f"AINet web  http://{host}:{port}/  "
-        f"(LAN: use this machine's IP, e.g. http://192.168.x.x:{port}/)\n"
+        f"(LAN: {lan_note})\n"
+        f"ESP32 ping  GET /api/esp32/ping   audio  POST /api/esp32/audio\n"
+        f"Set AINET_HOST in the Arduino sketch to: {', '.join(lan) or '<this-pc-ip>'}\n"
         f"model={config.model}  mode={mode_id}  db={config.db_root}  "
         f"soi_file={config.soi_idle_seconds:.0f}s",
         flush=True,

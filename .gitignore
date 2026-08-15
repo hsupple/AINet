@@ -33,3 +33,6 @@ dist/
 .idea/
 .vscode/
 *.swp
+
+# Local ESP32 WiFi / PC IP
+esp32/**/config.local.h

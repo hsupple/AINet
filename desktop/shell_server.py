@@ -213,7 +213,7 @@ class ShellApp:
             "ollama",
             "web",
             "--bind",
-            "127.0.0.1",
+            "0.0.0.0",
             "--port",
             str(CHAT_PORT),
         ]
@@ -270,7 +270,7 @@ class ShellApp:
         def _run() -> None:
             from ollama.webserver import serve as serve_chat
 
-            serve_chat(host="127.0.0.1", port=CHAT_PORT, config=self.config)
+            serve_chat(host="0.0.0.0", port=CHAT_PORT, config=self.config)
 
         thread = threading.Thread(target=_run, name="ainet-chat", daemon=True)
         thread.start()
