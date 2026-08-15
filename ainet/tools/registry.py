@@ -651,9 +651,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "spotify",
             "description": (
                 "Control Hayden's Spotify: what's playing, search, play/pause/skip, "
-                "volume, queue, devices. IF not connected -> action=connect (opens login). "
+                "volume, queue, Liked Songs, devices. "
+                "IF not connected -> action=connect (opens login). "
                 "Playback needs an active Spotify app on PC/phone. "
-                "IF play by name -> action=play with query."
+                "IF Hayden names a song/artist/vibe to hear -> action=play with query; "
+                "IF Hayden says queue -> action=queue with query. Both auto-pick the best "
+                "match and queue the remaining results, so never just search and ask. "
+                "action=search is only for questions with no playback intent. "
+                "IF play Liked Songs / saved songs -> action=play query='liked songs' "
+                "(never search the catalog for that phrase)."
             ),
             "parameters": {
                 "type": "object",
@@ -661,14 +667,14 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "action": {
                         "type": "string",
                         "description": (
-                            "status | connect | now_playing | search | play | pause | "
+                            "status | connect | now_playing | search | liked | play | pause | "
                             "next | previous | volume | queue | devices | transfer"
                         ),
                         "default": "status",
                     },
                     "query": {
                         "type": "string",
-                        "description": "Search text or song/artist to play/queue",
+                        "description": "Search text or song/artist to play/queue; use 'liked songs' to play that library",
                     },
                     "uri": {
                         "type": "string",
@@ -685,7 +691,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "limit": {
                         "type": "integer",
                         "default": 5,
-                        "description": "Search result count (1-10)",
+                        "description": "Search / liked list count",
                     },
                 },
                 "required": [],

@@ -265,15 +265,20 @@ class ChatApp:
         def _run() -> None:
             reply = ""
             cancelled = False
-            acquired = False
+            # Hold the Lock object we acquired — hard reset may replace self._ask_lock.
+            held_lock: threading.Lock | None = None
             try:
                 # Serialize asks, but don't wait forever if a prior turn is wedged.
-                acquired = self._ask_lock.acquire(timeout=2.0)
-                if not acquired:
+                candidate = self._ask_lock
+                if candidate.acquire(timeout=2.0):
+                    held_lock = candidate
+                else:
                     # Prior ask likely stuck; force-cancel so the gate can free.
                     self.session.request_cancel()
-                    acquired = self._ask_lock.acquire(timeout=8.0)
-                    if not acquired:
+                    candidate = self._ask_lock
+                    if candidate.acquire(timeout=8.0):
+                        held_lock = candidate
+                    else:
                         events.put(
                             {
                                 "type": "error",
@@ -281,22 +286,17 @@ class ChatApp:
                             }
                         )
                         return
-                try:
-                    reply = self.session.ask(
-                        text,
-                        stream=True,
-                        on_token=_on_token,
-                        on_tool=_on_tool,
-                        on_context=_on_context,
-                        on_wait=lambda snap: events.put(
-                            {"type": "status", "phase": "queued", **(snap or {})}
-                        ),
-                    )
-                    cancelled = self.session.cancelled()
-                finally:
-                    if acquired:
-                        self._ask_lock.release()
-                        acquired = False
+                reply = self.session.ask(
+                    text,
+                    stream=True,
+                    on_token=_on_token,
+                    on_tool=_on_tool,
+                    on_context=_on_context,
+                    on_wait=lambda snap: events.put(
+                        {"type": "status", "phase": "queued", **(snap or {})}
+                    ),
+                )
+                cancelled = self.session.cancelled()
                 self._append_raw(
                     source="oac",
                     user=text,
@@ -344,9 +344,9 @@ class ChatApp:
                 self._append_raw(source="oac", event="error", error=str(exc))
                 events.put({"type": "error", "error": str(exc)})
             finally:
-                if acquired:
+                if held_lock is not None:
                     try:
-                        self._ask_lock.release()
+                        held_lock.release()
                     except RuntimeError:
                         pass
                 events.put(None)

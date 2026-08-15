@@ -60,6 +60,9 @@ _MUTATING = {
     "refresh_read",
 }
 
+# Qwen3 sometimes answers with only the hidden %%mem%% block; resample instead.
+_MAX_EMPTY_ROUNDS = 2
+
 _PATH_ARG_KEYS = (
     "path",
     "src",
@@ -425,6 +428,8 @@ class ChatSession:
             except Exception:
                 pass
         final_text = ""
+        model_mem: str | None = None
+        empty_rounds = 0
         streamed_any = False
         streamed_parts: list[str] = []
         self.last_tool_names: list[str] = []
@@ -504,18 +509,34 @@ class ChatSession:
                         tool_calls = parse_content_tool_calls(content)
                         parsed_from_text = bool(tool_calls)
                     if not tool_calls:
-                        piece = split_reply(content)[0] if hide_mem else content
+                        piece, mem_piece = (
+                            split_reply(content) if hide_mem else (content, None)
+                        )
+                        if mem_piece:
+                            model_mem = mem_piece
                         if piece:
                             if final_text and piece not in final_text:
                                 final_text = final_text.rstrip() + "\n\n" + piece
                             elif not final_text:
                                 final_text = piece
+                            break
+                        if not final_text and empty_rounds < _MAX_EMPTY_ROUNDS:
+                            # Nothing but the hidden memory block (or silence). Drop the
+                            # dead turn and resample rather than showing an empty reply.
+                            empty_rounds += 1
+                            if self.messages and self.messages[-1] is message:
+                                self.messages.pop()
+                            continue
                         break
 
                 # Preamble before tool calls (math, explanation) must survive the
                 # later "I found a video…" message — don't drop it from the turn.
                 if content and tool_calls and not parsed_from_text:
-                    piece = split_reply(content)[0] if hide_mem else content
+                    piece, mem_piece = (
+                        split_reply(content) if hide_mem else (content, None)
+                    )
+                    if mem_piece:
+                        model_mem = mem_piece
                     if piece and piece not in (final_text or ""):
                         final_text = (
                             final_text.rstrip() + "\n\n" + piece if final_text else piece
@@ -707,6 +728,7 @@ class ChatSession:
         if hide_mem:
             visible, mem = split_reply(final_text or "")
             final_text = visible
+            mem = mem or model_mem
             if mem:
                 self.convo_memory = mem
             else:

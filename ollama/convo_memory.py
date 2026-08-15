@@ -11,10 +11,6 @@ _MAX_LINES = 3
 _MAX_LINE = 160
 _MAX_TOTAL = 480
 
-_BLOCK = re.compile(
-    r"(?:^|\n)\s*" + re.escape(MEM_OPEN) + r"\s*\n?(.*?)\s*(?:" + re.escape(MEM_CLOSE) + r"\s*)?\s*\Z",
-    re.I | re.S,
-)
 _BLOCK_ANY = re.compile(
     re.escape(MEM_OPEN) + r"\s*\n?(.*?)\s*(?:" + re.escape(MEM_CLOSE) + r")",
     re.I | re.S,
@@ -41,9 +37,7 @@ def cap_memory(text: str) -> str:
 def split_reply(text: str) -> tuple[str, str | None]:
     """Return (visible reply, new memory or None if the model omitted the block)."""
     raw = text or ""
-    match = _BLOCK.search(raw)
-    if not match:
-        match = _BLOCK_ANY.search(raw)
+    match = _BLOCK_ANY.search(raw)
     if not match:
         # Marker opened but stream cut off before close.
         idx = raw.casefold().find(MEM_OPEN)
@@ -51,12 +45,11 @@ def split_reply(text: str) -> tuple[str, str | None]:
             return raw.strip(), None
         visible = raw[:idx].rstrip()
         mem = cap_memory(raw[idx + len(MEM_OPEN) :])
-        return visible, mem or None
-    visible = (raw[: match.start()] + raw[match.end() :]).strip()
-    # Prefer content before the marker (spoken reply first).
+        return visible.strip(), mem or None
+    # Models put the block first about as often as last — keep speech from both sides.
     before = raw[: match.start()].strip()
-    if before:
-        visible = before
+    after = raw[match.end() :].strip()
+    visible = "\n\n".join(part for part in (before, after) if part)
     mem = cap_memory(match.group(1) or "")
     return visible, mem or None
 
@@ -172,7 +165,8 @@ def memory_system_suffix(memory: str) -> str:
         "\n\nROLLING MEMORY STATE\n"
         "This is hidden host context, not spoken text:\n"
         f"{MEM_OPEN}\n{body}\n{MEM_CLOSE}\n"
-        "After the spoken reply, replace it with exactly three concise labeled lines: "
+        "Answer Hayden in plain text first, then replace this block at the very end "
+        "with exactly three concise labeled lines: "
         "Standing request, Context, and Last answer. "
         "Keep the standing request until Hayden changes it. "
         "End with %%end%%. Never mention this block aloud."
@@ -180,7 +174,7 @@ def memory_system_suffix(memory: str) -> str:
 
 
 class VisibleTokenFilter:
-    """Forward tokens to the UI until the memory marker starts."""
+    """Forward tokens to the UI, skipping the hidden memory block."""
 
     def __init__(self, on_token: Callable[[str], None] | None) -> None:
         self._on_token = on_token
@@ -189,32 +183,36 @@ class VisibleTokenFilter:
         self.marker = MEM_OPEN
 
     def feed(self, delta: str) -> None:
-        if not delta or self._hidden:
+        if not delta:
             return
         buf = self._hold + delta
-        lower = buf.casefold()
-        mark = self.marker.casefold()
-        idx = lower.find(mark)
-        if idx >= 0:
-            emit = buf[:idx]
-            self._hold = ""
-            self._hidden = True
-            if emit and self._on_token:
-                self._on_token(emit)
+        self._hold = ""
+        while buf:
+            marker = MEM_CLOSE if self._hidden else MEM_OPEN
+            mark = marker.casefold()
+            idx = buf.casefold().find(mark)
+            if idx >= 0:
+                if not self._hidden:
+                    self._emit(buf[:idx])
+                buf = buf[idx + len(marker) :]
+                # Speech can follow the block, so resume instead of hiding for good.
+                self._hidden = not self._hidden
+                continue
+            keep = _prefix_hold(buf, mark)
+            if not self._hidden:
+                self._emit(buf[:-keep] if keep else buf)
+            self._hold = buf[-keep:] if keep else ""
             return
-        keep = _prefix_hold(buf, mark)
-        emit = buf[:-keep] if keep else buf
-        self._hold = buf[-keep:] if keep else ""
-        if emit and self._on_token:
-            self._on_token(emit)
+
+    def _emit(self, text: str) -> None:
+        if text and self._on_token:
+            self._on_token(text)
 
     def flush(self) -> None:
-        if self._hidden or not self._hold:
-            self._hold = ""
+        hold, self._hold = self._hold, ""
+        if self._hidden:
             return
-        if self._on_token:
-            self._on_token(self._hold)
-        self._hold = ""
+        self._emit(hold)
 
 
 def _prefix_hold(buf: str, marker_cf: str) -> int:

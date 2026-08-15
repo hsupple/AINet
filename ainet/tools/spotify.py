@@ -28,10 +28,13 @@ _SCOPES = " ".join(
         "user-modify-playback-state",
         "user-read-currently-playing",
         "user-read-recently-played",
+        "user-library-read",
+        "user-read-private",
     ]
 )
 _LOCK = threading.RLock()
 _PENDING: dict[str, dict[str, Any]] = {}
+_MARKET_CACHE: str | None = None
 
 _DEFAULT_REDIRECT = "http://127.0.0.1:1111/auth/spotify/callback"
 
@@ -249,9 +252,13 @@ def _http_json(
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
-            if not raw:
+            if not raw.strip():
                 return {"ok": True, "status": resp.status}
-            return json.loads(raw)
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                # Playback endpoints answer 200/204 with a non-JSON body.
+                return {"ok": True, "status": resp.status, "body": raw[:200]}
     except urllib.error.HTTPError as exc:
         err_body = exc.read().decode("utf-8", errors="replace")
         try:
@@ -349,14 +356,87 @@ def _access_token() -> str:
 def _api(method: str, path: str, *, payload: dict[str, Any] | None = None, params: dict[str, str] | None = None) -> Any:
     token = _access_token()
     url = path if path.startswith("http") else f"{_API}{path}"
-    try:
-        return _http_json(method, url, token=token, payload=payload, params=params)
-    except RuntimeError as exc:
-        # One retry on auth failure
-        if "token" in str(exc).lower() or "unauthorized" in str(exc).lower():
-            token = _refresh_access()
+    attempts = 5
+    last_exc: RuntimeError | None = None
+    for attempt in range(attempts):
+        try:
             return _http_json(method, url, token=token, payload=payload, params=params)
-        raise
+        except RuntimeError as exc:
+            last_exc = exc
+            msg = str(exc).lower()
+            if "token" in msg or "unauthorized" in msg:
+                token = _refresh_access()
+                continue
+            # Spotify search/playback often returns 502 "unexpected error" — brief retry.
+            if attempt < attempts - 1 and (
+                "unexpected error" in msg
+                or "bad gateway" in msg
+                or "server error" in msg
+                or "try again" in msg
+                or "rate limit" in msg
+            ):
+                time.sleep(0.35 * (attempt + 1))
+                continue
+            raise
+    assert last_exc is not None
+    raise last_exc
+
+
+def _user_market() -> str:
+    """Spotify search is unreliable without market; default US if profile unavailable."""
+    global _MARKET_CACHE
+    if _MARKET_CACHE:
+        return _MARKET_CACHE
+    try:
+        me = _api("GET", "/me")
+        country = str((me or {}).get("country") or "").strip().upper()
+        if len(country) == 2:
+            _MARKET_CACHE = country
+            return country
+    except RuntimeError:
+        pass
+    _MARKET_CACHE = "US"
+    return _MARKET_CACHE
+
+
+def _user_id() -> str:
+    try:
+        me = _api("GET", "/me")
+        return str((me or {}).get("id") or "").strip()
+    except RuntimeError:
+        return ""
+
+
+def _pick_device_id(preferred: str = "") -> str:
+    preferred = (preferred or "").strip()
+    if preferred:
+        return preferred
+    devices = list_devices()
+    if not devices.get("ok"):
+        return ""
+    active = devices.get("active")
+    if isinstance(active, dict) and active.get("id"):
+        return str(active["id"])
+    for d in devices.get("devices") or []:
+        if isinstance(d, dict) and d.get("id"):
+            return str(d["id"])
+    return ""
+
+
+def _ensure_playback_device(device_id: str = "") -> str:
+    """Prefer an active device; otherwise transfer to any available device."""
+    did = _pick_device_id(device_id)
+    if not did:
+        return ""
+    devices = list_devices()
+    active = devices.get("active") if devices.get("ok") else None
+    if isinstance(active, dict) and str(active.get("id") or "") == did:
+        return did
+    try:
+        transfer_playback(did, play=False)
+    except Exception:
+        pass
+    return did
 
 
 def _track_summary(item: dict[str, Any] | None) -> dict[str, Any]:
@@ -449,12 +529,14 @@ def search_catalog(query: str, *, limit: int = 5, types: str = "track") -> dict[
         return {"ok": False, "error": "query is required"}
     limit = max(1, min(10, int(limit)))
     type_list = ",".join(t.strip() for t in (types or "track").split(",") if t.strip()) or "track"
+    params = {
+        "q": q,
+        "type": type_list,
+        "limit": str(limit),
+        "market": _user_market(),
+    }
     try:
-        data = _api(
-            "GET",
-            "/search",
-            params={"q": q, "type": type_list, "limit": str(limit)},
-        )
+        data = _api("GET", "/search", params=params)
     except RuntimeError as exc:
         return {"ok": False, "error": str(exc)}
     tracks = []
@@ -472,24 +554,186 @@ def search_catalog(query: str, *, limit: int = 5, types: str = "track") -> dict[
     }
 
 
+def _looks_like_liked_request(text: str) -> bool:
+    t = " ".join((text or "").casefold().split())
+    if not t:
+        return False
+    needles = (
+        "liked songs",
+        "liked song",
+        "liked playlist",
+        "my likes",
+        "saved songs",
+        "saved tracks",
+        "liked tracks",
+        "my library",
+    )
+    return any(n in t for n in needles)
+
+
+def liked_songs(*, limit: int = 20, play: bool = False, device_id: str = "") -> dict[str, Any]:
+    """List or play Hayden's Liked Songs library."""
+    limit = max(1, min(50, int(limit)))
+    uid = _user_id()
+    if play:
+        did = _ensure_playback_device(device_id)
+        params: dict[str, str] = {}
+        if did:
+            params["device_id"] = did
+        # Undocumented but stable Liked Songs context.
+        if uid:
+            try:
+                _api(
+                    "PUT",
+                    "/me/player/play",
+                    payload={"context_uri": f"spotify:user:{uid}:collection"},
+                    params=params or None,
+                )
+                time.sleep(0.35)
+                np = now_playing()
+                return {
+                    "ok": True,
+                    "liked": True,
+                    "summary": np.get("summary") or "Playing Liked Songs",
+                    "track": np.get("track"),
+                }
+            except RuntimeError:
+                pass
+        # Fallback: play a batch of saved track URIs.
+        listed = liked_songs(limit=min(limit, 50), play=False)
+        if not listed.get("ok"):
+            return listed
+        uris = [str(t.get("uri") or "") for t in (listed.get("tracks") or []) if t.get("uri")]
+        if not uris:
+            return {"ok": False, "error": "Liked Songs is empty"}
+        try:
+            _api(
+                "PUT",
+                "/me/player/play",
+                payload={"uris": uris},
+                params=params or None,
+            )
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "NO_ACTIVE_DEVICE" in msg.upper() or "active device" in msg.lower():
+                return {
+                    "ok": False,
+                    "error": "No active Spotify device. Open Spotify on your PC or phone, play anything once, then retry.",
+                }
+            if "insufficient client scope" in msg.lower() or "scope" in msg.lower():
+                return {
+                    "ok": False,
+                    "error": "Spotify needs re-link for Liked Songs — call action=connect so Hayden can approve library access.",
+                    "needs_reconnect": True,
+                }
+            return {"ok": False, "error": msg}
+        time.sleep(0.35)
+        np = now_playing()
+        return {
+            "ok": True,
+            "liked": True,
+            "summary": np.get("summary") or f"Playing {len(uris)} Liked Songs",
+            "track": np.get("track"),
+        }
+
+    try:
+        data = _api("GET", "/me/tracks", params={"limit": str(limit), "market": _user_market()})
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "insufficient client scope" in msg.lower() or "scope" in msg.lower():
+            return {
+                "ok": False,
+                "error": "Spotify needs re-link for Liked Songs — call action=connect so Hayden can approve library access.",
+                "needs_reconnect": True,
+            }
+        return {"ok": False, "error": msg}
+    tracks = []
+    for row in (data.get("items") if isinstance(data, dict) else None) or []:
+        if not isinstance(row, dict):
+            continue
+        track = row.get("track")
+        if isinstance(track, dict):
+            tracks.append(_track_summary(track))
+    return {
+        "ok": True,
+        "liked": True,
+        "tracks": tracks,
+        "summary": f"{len(tracks)} Liked Song(s)"
+        + (f"; latest: {tracks[0].get('name')} — {tracks[0].get('artists')}" if tracks else ""),
+    }
+
+
+def _best_track_match(query: str, tracks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Prefer an exact / close title match over Spotify's sometimes-odd ranking."""
+    if not tracks:
+        return None
+    q = " ".join((query or "").casefold().split())
+    if not q:
+        return tracks[0]
+
+    def score(track: dict[str, Any]) -> tuple[int, int]:
+        name = " ".join(str(track.get("name") or "").casefold().split())
+        artists = " ".join(str(track.get("artists") or "").casefold().split())
+        hay = f"{name} {artists}".strip()
+        if name == q:
+            return (0, 0)
+        if name.startswith(q) or q.startswith(name):
+            return (1, abs(len(name) - len(q)))
+        if q in name:
+            return (2, abs(len(name) - len(q)))
+        if all(tok in hay for tok in q.split()):
+            return (3, abs(len(name) - len(q)))
+        return (9, abs(len(name) - len(q)))
+
+    return min(tracks, key=score)
+
+
+def _queue_uris(uris: list[str], *, device_id: str = "") -> list[str]:
+    """Queue extra tracks behind the current one; ignore individual failures."""
+    queued: list[str] = []
+    for uri in uris:
+        if not uri:
+            continue
+        params = {"uri": uri}
+        if device_id:
+            params["device_id"] = device_id
+        try:
+            _api("POST", "/me/player/queue", params=params)
+        except RuntimeError:
+            continue
+        queued.append(uri)
+    return queued
+
+
 def play(
     *,
     uri: str = "",
     query: str = "",
     device_id: str = "",
+    queue_rest: bool = True,
+    limit: int = 5,
 ) -> dict[str, Any]:
+    q = (query or "").strip()
+    if _looks_like_liked_request(q) and not (uri or "").strip():
+        return liked_songs(play=True, device_id=device_id)
+
     track_uri = (uri or "").strip()
-    if not track_uri and (query or "").strip():
-        found = search_catalog(query, limit=1)
+    picked: dict[str, Any] | None = None
+    rest: list[dict[str, Any]] = []
+    if not track_uri and q:
+        found = search_catalog(q, limit=max(1, min(10, int(limit or 5))))
         if not found.get("ok"):
             return found
-        tracks = found.get("tracks") or []
-        if not tracks:
-            return {"ok": False, "error": f"No tracks found for {query!r}"}
-        track_uri = str(tracks[0].get("uri") or "")
+        tracks = [t for t in (found.get("tracks") or []) if isinstance(t, dict)]
+        picked = _best_track_match(q, tracks)
+        if not picked:
+            return {"ok": False, "error": f"No tracks found for {q!r}"}
+        track_uri = str(picked.get("uri") or "")
+        rest = [t for t in tracks if str(t.get("uri") or "") != track_uri]
     params: dict[str, str] = {}
-    if device_id.strip():
-        params["device_id"] = device_id.strip()
+    did = _ensure_playback_device(device_id)
+    if did:
+        params["device_id"] = did
     payload: dict[str, Any] | None = None
     if track_uri:
         if track_uri.startswith("spotify:playlist:") or track_uri.startswith("spotify:album:"):
@@ -506,12 +750,28 @@ def play(
                 "error": "No active Spotify device. Open Spotify on your PC or phone, play anything once, then retry.",
             }
         return {"ok": False, "error": msg}
+
+    queued: list[str] = []
+    if queue_rest and rest:
+        queued = _queue_uris([str(t.get("uri") or "") for t in rest], device_id=did)
+
+    time.sleep(0.35)
     np = now_playing()
+    summary = np.get("summary") or "Playback started"
+    if picked and picked.get("name"):
+        summary = f"Playing: {picked.get('name')} — {picked.get('artists') or '?'}"
+    if queued:
+        summary += f"; queued {len(queued)} more"
     return {
         "ok": True,
         "uri": track_uri or None,
-        "summary": np.get("summary") or "Playback started",
-        "track": np.get("track"),
+        "summary": summary,
+        "track": np.get("track") or picked,
+        "queued": [
+            {"name": t.get("name"), "artists": t.get("artists")}
+            for t in rest
+            if str(t.get("uri") or "") in set(queued)
+        ],
     }
 
 
@@ -552,26 +812,67 @@ def set_volume(percent: int) -> dict[str, Any]:
     return {"ok": True, "volume_percent": vol, "summary": f"Volume set to {vol}%"}
 
 
-def queue_track(*, uri: str = "", query: str = "") -> dict[str, Any]:
+def queue_track(
+    *,
+    uri: str = "",
+    query: str = "",
+    device_id: str = "",
+    limit: int = 5,
+) -> dict[str, Any]:
+    q = (query or "").strip()
+    if _looks_like_liked_request(q) and not (uri or "").strip():
+        return liked_songs(play=True, device_id=device_id)
+
     track_uri = (uri or "").strip()
-    if not track_uri and (query or "").strip():
-        found = search_catalog(query, limit=1)
+    picked: dict[str, Any] | None = None
+    rest: list[dict[str, Any]] = []
+    if not track_uri and q:
+        found = search_catalog(q, limit=max(1, min(10, int(limit or 5))))
         if not found.get("ok"):
             return found
-        tracks = found.get("tracks") or []
-        if not tracks:
-            return {"ok": False, "error": f"No tracks found for {query!r}"}
-        track_uri = str(tracks[0].get("uri") or "")
-        label = f"{tracks[0].get('name')} — {tracks[0].get('artists')}"
-    else:
-        label = track_uri
+        tracks = [t for t in (found.get("tracks") or []) if isinstance(t, dict)]
+        picked = _best_track_match(q, tracks)
+        if not picked:
+            return {"ok": False, "error": f"No tracks found for {q!r}"}
+        track_uri = str(picked.get("uri") or "")
+        rest = [t for t in tracks if str(t.get("uri") or "") != track_uri]
     if not track_uri:
         return {"ok": False, "error": "uri or query is required"}
-    try:
-        _api("POST", "/me/player/queue", params={"uri": track_uri})
-    except RuntimeError as exc:
-        return {"ok": False, "error": str(exc)}
-    return {"ok": True, "uri": track_uri, "summary": f"Queued {label}"}
+
+    label = (
+        f"{picked.get('name')} — {picked.get('artists')}" if picked else track_uri
+    )
+    did = _ensure_playback_device(device_id)
+
+    # Nothing playing yet means a queued track would just sit there — start it.
+    np = now_playing()
+    if not np.get("playing"):
+        started = play(
+            uri=track_uri,
+            device_id=did,
+            queue_rest=False,
+        )
+        if started.get("ok"):
+            queued = _queue_uris(
+                [str(t.get("uri") or "") for t in rest], device_id=did
+            )
+            summary = f"Playing: {label}"
+            if queued:
+                summary += f"; queued {len(queued)} more"
+            return {**started, "summary": summary, "queued_count": len(queued)}
+
+    queued = _queue_uris([track_uri, *[str(t.get("uri") or "") for t in rest]], device_id=did)
+    if not queued:
+        return {"ok": False, "error": f"Could not queue {label}"}
+    summary = f"Queued {label}"
+    if len(queued) > 1:
+        summary += f" + {len(queued) - 1} more"
+    return {
+        "ok": True,
+        "uri": track_uri,
+        "summary": summary,
+        "queued_count": len(queued),
+    }
 
 
 def transfer_playback(device_id: str, *, play: bool = True) -> dict[str, Any]:
@@ -645,8 +946,12 @@ def spotify(
         return list_devices()
     if act == "search":
         return search_catalog(query, limit=limit)
+    if act in {"liked", "liked_songs", "likes", "saved", "library"}:
+        return liked_songs(limit=limit if limit else 20, play=False, device_id=device_id)
     if act == "play":
-        return play(uri=uri, query=query, device_id=device_id)
+        if _looks_like_liked_request(query) and not uri.strip():
+            return liked_songs(play=True, device_id=device_id)
+        return play(uri=uri, query=query, device_id=device_id, limit=limit)
     if act == "pause":
         return pause()
     if act == "next":
@@ -658,14 +963,14 @@ def spotify(
             return {"ok": False, "error": "volume (0-100) is required"}
         return set_volume(int(volume))
     if act == "queue":
-        return queue_track(uri=uri, query=query)
+        return queue_track(uri=uri, query=query, device_id=device_id, limit=limit)
     if act == "transfer":
         return transfer_playback(device_id, play=True)
     return {
         "ok": False,
         "error": (
             f"Unknown action '{action}'. Use: status, connect, now_playing, search, "
-            "play, pause, next, previous, volume, queue, devices, transfer"
+            "liked, play, pause, next, previous, volume, queue, devices, transfer"
         ),
     }
 
