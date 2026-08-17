@@ -225,13 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             json.dumps(
                 {
-                    "soi_idle_seconds": config.soi_idle_seconds,
-                    "soi_read_refresh_idle_seconds": config.soi_read_refresh_idle_seconds,
                     "pending_changelog": len(worker.pending_changelog()),
-                    "pending_inbox": len(worker.pending_inbox()),
                     "has_filing_work": worker.has_filing_work(),
-                    "needs_read_refresh": worker.needs_read_refresh(),
-                    "read_json_count": len(worker.list_read_json_paths()),
                     "state_file": str(worker.state_path),
                     "state": state,
                 },
@@ -251,10 +246,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if worker.has_filing_work():
                 result = worker.run_filing()
-            elif worker.needs_read_refresh():
-                result = worker.run_read_refresh()
             else:
-                result = {"ok": True, "ran": False, "reason": "no filing or read-refresh work"}
+                result = {"ok": True, "ran": False, "reason": "no filing work"}
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0 if result.get("ok") else 1
 

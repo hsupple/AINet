@@ -1,12 +1,4 @@
-"""Default JSON shapes for standard COP documents.
-
-Edit these files to define how new COP docs start:
-  Profile.json, Read.json, Plan.json, History.json
-  (+ Decisions.json, Open Questions.json for projects)
-
-`generic.json` is the fallback for any other new *.json name.
-The `_ainet` block is documentation only and is stripped when seeding the DB.
-"""
+"""Default JSON shapes for knowledge files and generic new JSON."""
 
 from __future__ import annotations
 
@@ -15,23 +7,14 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-# Core COP document types — edit these.
-COP_DOCUMENTS = (
-    "Profile.json",
-    "Read.json",
-    "Plan.json",
-    "History.json",
-    "Decisions.json",
-    "Open Questions.json",
-)
-
-# Hayden personal templates
-HAYDEN_DOCUMENTS = (
-    "Person.json",
-    "SecretCategory.json",
-    "Sides.json",
-    "Captures.json",
-    "MilestoneLog.json",
+KNOWLEDGE_DOCUMENTS = (
+    "hayden.json",
+    "people.json",
+    "questions.json",
+    "household.json",
+    "memories.json",
+    "secrets.json",
+    "project.json",
 )
 
 
@@ -43,12 +26,26 @@ def list_templates() -> list[str]:
     return sorted(p.name for p in defaults_dir().glob("*.json"))
 
 
+_LOG_FILES = {
+    "people.json",
+    "questions.json",
+    "household.json",
+    "memories.json",
+    "secrets.json",
+}
+
+
 def load_default(filename: str) -> dict[str, Any] | list[Any] | Any:
     """Return a deep copy of the template for `filename` (basename).
 
     Exact match first, else `generic.json`. Strips `_ainet` metadata.
     """
     name = Path(filename).name
+    key = name.casefold()
+    if key == "hayden.json":
+        name = "Hayden.json"
+    elif key in _LOG_FILES:
+        name = "LogFile.json"
     path = defaults_dir() / name
     if not path.is_file():
         path = defaults_dir() / "generic.json"
@@ -58,57 +55,20 @@ def load_default(filename: str) -> dict[str, Any] | list[Any] | Any:
 
 
 def load_default_for_path(relative_path: str) -> dict[str, Any] | list[Any] | Any:
-    """Resolve a template from a DB-relative path (basename + Hayden conventions)."""
+    """Resolve a template from a DB-relative path."""
     rel = str(relative_path).replace("\\", "/").strip("/")
     name = Path(rel).name
     parts = Path(rel).parts
-
-    # One file per person
-    if (
-        len(parts) >= 4
-        and parts[0] == "Hayden"
-        and parts[1] == "Relationships"
-        and parts[2] == "People"
-        and name.endswith(".json")
+    if name.casefold() == "project.json" or (
+        len(parts) >= 2 and parts[0].casefold() == "projects" and name.casefold() == "project.json"
     ):
-        return load_default("Person.json")
-
-    # Secrets category vaults (not Read/Index)
-    if (
-        len(parts) == 3
-        and parts[0] == "Hayden"
-        and parts[1] == "Secrets"
-        and name.endswith(".json")
-        and name not in {"Read.json", "Index.json"}
-    ):
-        return load_default("SecretCategory.json")
-
-    if (
-        len(parts) >= 3
-        and parts[0] == "Hayden"
-        and parts[1] == "Memories"
-        and parts[2] == "Milestones"
-        and name == "Log.json"
-    ):
-        return load_default("MilestoneLog.json")
-
-    if (
-        len(parts) == 3
-        and parts[0] == "Hayden"
-        and parts[1] == "Inbox"
-        and name == "Captures.json"
-    ):
-        return load_default("Captures.json")
-
-    if (
-        len(parts) == 4
-        and parts[0] == "Hayden"
-        and parts[1] == "Preferences"
-        and parts[2] == "Music"
-        and name == "Spotify.json"
-    ):
-        return load_default("Spotify.json")
-
+        data = load_default("project.json")
+        if isinstance(data, dict) and len(parts) >= 2:
+            data = dict(data)
+            data["name"] = parts[1]
+        return data
+    if name.casefold() == "hayden.json":
+        return load_default("Hayden.json")
     return load_default(name)
 
 
@@ -121,6 +81,8 @@ def _strip_meta(data: Any) -> Any:
 def package_template_text(filename: str) -> str:
     name = Path(filename).name
     path = defaults_dir() / name
+    if not path.is_file() and name.casefold() == "hayden.json":
+        path = defaults_dir() / "Hayden.json"
     if not path.is_file():
         raise FileNotFoundError(f"No default template named {name}")
     return path.read_text(encoding="utf-8")

@@ -6,21 +6,10 @@ from ollama.prompts import soi as soi_prompt
 MODE = Mode(
     id="soi",
     name="SOI",
-    description="AI2 Slave of Information. Idle filer: changelog + inbox → DB (full tools).",
+    description="AI2 Slave of Information. Idle filer: changelog → log_item.",
     prompt=soi_prompt.PROMPT,
     tools_enabled=True,
-    tool_names=(
-        "list_dir",
-        "tree",
-        "read_json",
-        "create_cop",
-        "create_project",
-        "create_folder",
-        "write_json",
-        "patch_json",
-        "create_json",
-        "file_by_id",
-    ),
+    tool_names=("log_item",),
     role="soi",
     allow_mutations=True,
 )

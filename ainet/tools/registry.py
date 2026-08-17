@@ -20,6 +20,7 @@ READ_TOOL_NAMES = frozenset(
         "tree",
         "read_text",
         "read_json",
+        "query_db",
         "web_search",
         "web_fetch",
         "image_search",
@@ -48,16 +49,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "list_dir",
             "description": (
-                "path='.' returns every Read.json in the database — use this first to "
-                "find where something about Hayden lives. Any other path lists that "
-                "folder's immediate children."
+                "path='.' lists the knowledge files at db/ root. Prefer query_db to look "
+                "up stored facts by name, words, and dates instead of dumping whole files."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative folder path. Use '.' for the whole-database Read.json index.",
+                        "description": "Relative folder path. Use '.' for the knowledge-file index.",
                         "default": ".",
                     }
                 },
@@ -94,11 +94,79 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "read_json",
-            "description": "Read and parse a JSON file from the database.",
+            "description": (
+                "Read and parse a whole JSON file. Prefer query_db for personal facts "
+                "(people, traits, dates, words). Use this when you need the raw file."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_db",
+            "description": (
+                "Look up stored personal facts. Knowledge files are maps of named keys to "
+                "observation lists (a person name maps to [{\"time\", \"text\"}, ...]). "
+                "Filter by dest/file, person or topic name, words (q), and dates. "
+                "Omit dest to search all files except secrets. Host returns count/strength. "
+                "Use keys_only=true to list names without entries. "
+                "Only set include_secrets or dest=secrets when Hayden asks about private facts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dest": {
+                        "type": "string",
+                        "description": (
+                            "hayden, people, questions, household, memories, secrets, "
+                            "a hayden section (preferences, habits, ...), a project name, or a filename"
+                        ),
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "Alias of dest (people.json, hayden.json, ...)",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Person, trait, or topic key (substring ok)",
+                    },
+                    "q": {
+                        "type": "string",
+                        "description": "Words that must appear in the name or observation text",
+                    },
+                    "after": {
+                        "type": "string",
+                        "description": "Keep observations on/after this date (YYYY-MM-DD or ISO)",
+                    },
+                    "before": {
+                        "type": "string",
+                        "description": "Keep observations on/before this date (YYYY-MM-DD or ISO)",
+                    },
+                    "since_days": {
+                        "type": "integer",
+                        "description": "Only observations from the last N days",
+                    },
+                    "keys_only": {
+                        "type": "boolean",
+                        "description": "Return names/counts without observation text",
+                        "default": False,
+                    },
+                    "include_secrets": {
+                        "type": "boolean",
+                        "description": "Include secrets.json when dest is omitted",
+                        "default": False,
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max matching keys to return (default 16, max 40)",
+                        "default": 16,
+                    },
+                },
             },
         },
     },
@@ -128,7 +196,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "create_json",
             "description": (
                 "Create a new JSON file. If data is omitted, uses the matching template from "
-                "ainet/defaults/ (Profile.json, Read.json, Plan.json, etc., else generic.json)."
+                "ainet/defaults/ (Hayden.json, LogFile.json, project.json, else generic.json)."
             ),
             "parameters": {
                 "type": "object",
@@ -153,7 +221,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "filename": {
                         "type": "string",
-                        "description": "Template filename, e.g. Profile.json or Read.json",
+                        "description": "Template filename, e.g. Hayden.json or project.json",
                     }
                 },
                 "required": ["filename"],
@@ -236,10 +304,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "create_project",
             "description": (
-                "PREFERRED way to start any new project. Creates a project directory "
-                "at Projects/<Name>/ with Read.json, History.json, Notes.json, Plan.json, "
-                "Profile.json, Files/, and History/. Never use create_folder or create_cop "
-                "for this. Then call open_project to focus this chat on it."
+                "PREFERRED way to start any new project. Creates Projects/<Name>/ "
+                "with project.json and Files/. Never use create_folder for this. "
+                "Then call open_project to focus this chat on it."
             ),
             "parameters": {
                 "type": "object",
@@ -250,7 +317,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     },
                     "summary": {
                         "type": "string",
-                        "description": "Short description for Read.json",
+                        "description": "Optional short description",
                     },
                 },
                 "required": ["name"],
@@ -261,7 +328,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_projects",
-            "description": "List user projects under Projects/ (name, path, Read summary).",
+            "description": "List user projects under Projects/ (name, path, top labels).",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -300,35 +367,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "create_cop",
-            "description": (
-                "Create a school course or Work COP from Folderrules templates "
-                "(Profile/Read/Plan/History). "
-                "path = COP root (School/Courses/<Code> or Work/Projects/<Name>). "
-                "kind = course | project. "
-                "Not for Hayden's user projects — those use create_project."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "COP root path, e.g. School/Courses/ME365",
-                    },
-                    "kind": {
-                        "type": "string",
-                        "enum": ["course", "project"],
-                        "description": "course → School/Courses; project → Work/Projects",
-                    },
-                    "summary": {"type": "string"},
-                },
-                "required": ["path", "kind"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "move_path",
             "description": "Move/rename a file or folder inside the database.",
             "parameters": {
@@ -339,22 +377,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "summary": {"type": "string"},
                 },
                 "required": ["src", "dest"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "archive_to_history",
-            "description": "Move a path into History/ (nearest domain History, or an explicit history_dir).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "history_dir": {"type": "string"},
-                    "summary": {"type": "string"},
-                },
-                "required": ["path"],
             },
         },
     },
@@ -378,140 +400,43 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "capture_inbox",
+            "name": "log_item",
             "description": (
-                "Append a lasting but unsorted scrap to Hayden/Inbox/Captures.json. "
-                "Use when info matters but has no clear home yet. Do not use for ephemeral chatter."
+                "SOI filing. Create a named key if missing, then append one observation. "
+                "label is the key: a person name (Jake), trait (studious), or topic. "
+                "Host writes \"Jake\": [] then appends {time, text: reason}. "
+                "Reuse an existing key from the labels list (case-insensitive). "
+                "dest=discard for greetings. Split a turn: same entry_id, different dest/label."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string"},
-                    "tags": {"type": "array", "items": {"type": "string"}},
-                    "suggested_home": {
-                        "type": "string",
-                        "description": "Optional guess like Preferences/Food.json or Relationships/People/Jake.json",
+                    "entry_id": {"type": "string", "description": "One Changelog entry id"},
+                    "entry_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Several Changelog ids for one synthesized same-session item",
                     },
-                    "source": {"type": "string", "default": "conversation"},
+                    "dest": {
+                        "type": "string",
+                        "description": (
+                            "hayden, preferences, habits, values, desires, body, psychology, "
+                            "people, questions, household, memories, secrets, "
+                            "discard, or a project name"
+                        ),
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Key to create or append: person name, trait, or topic",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "One sentence appended onto that key's list",
+                    },
                     "summary": {"type": "string"},
                 },
-                "required": ["text"],
+                "required": ["dest", "label", "reason"],
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "mark_read_stale",
-            "description": (
-                "Append to the nearest folder Read.json read_changelog and set needs_update=true. "
-                "Mutating writers usually do this automatically; call explicitly if needed after filing."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "folder_or_path": {
-                        "type": "string",
-                        "description": "Folder or file path whose nearest Read should be marked stale",
-                    },
-                    "summary": {
-                        "type": "string",
-                        "description": "Short note of what changed (kept in read_changelog)",
-                    },
-                    "source_path": {
-                        "type": "string",
-                        "description": "Optional explicit source path for the changelog entry",
-                    },
-                },
-                "required": ["folder_or_path", "summary"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "refresh_read",
-            "description": (
-                "SOI Phase 2 only: atomically update a folder's compact Read.json digest "
-                "and mark its pending freshness log consumed."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "read_path": {
-                        "type": "string",
-                        "description": "Exact Read.json path supplied in the phase-2 payload",
-                    },
-                    "digest": {
-                        "type": "object",
-                        "properties": {
-                            "summary": {"type": "string"},
-                            "state": {"type": "string"},
-                            "important_context": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                            "recent_changes": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                            "active_items": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                            "known_facts": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                            "uncertainties": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                        },
-                        "required": [
-                            "summary",
-                            "state",
-                            "important_context",
-                            "recent_changes",
-                            "active_items",
-                            "known_facts",
-                            "uncertainties",
-                        ],
-                    },
-                },
-                "required": ["read_path", "digest"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "mark_read_refreshed",
-            "description": (
-                "After a successful Read.json rewrite: set needs_update=false and mark pending "
-                "read_changelog entries consumed. Pass the Read.json path or its folder."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "read_path": {
-                        "type": "string",
-                        "description": "Read.json path or containing folder",
-                    }
-                },
-                "required": ["read_path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_stale_reads",
-            "description": (
-                "List Read.json paths with needs_update=true or pending read_changelog entries "
-                "(SOI Phase 2 refresh candidates)."
-            ),
-            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -864,94 +789,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "file_note",
-            "description": (
-                "Phase 1 filing — preferred for SOI. Pass dest, text (a short note YOU write), "
-                "and entry_id or entry_ids. Same-session threads MAY be one synthesized note "
-                "with entry_ids covering the whole inquiry. Host stores the note in "
-                "<folder>/Notes.json and each raw message in History.json. "
-                "Call again with the same entry_id and a different dest when one turn "
-                "contains several kinds of fact (friends -> Relationships, feelings -> "
-                "Psychology, wants -> Desires). Each call's text covers only that dest. "
-                "dest=discard for greetings and acknowledgment-only turns."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "entry_id": {
-                        "type": "string",
-                        "description": "One Changelog entry id",
-                    },
-                    "entry_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Several Changelog ids for one synthesized same-session note",
-                    },
-                    "dest": {
-                        "type": "string",
-                        "description": (
-                            "Folder from the folders list (Values, Pantry, Hayden/Values) "
-                            "or Questions (the only allowed root). discard for greetings/"
-                            "acknowledgments with no new information."
-                        ),
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "Short note that will make sense months later (not a raw paste)",
-                    },
-                    "summary": {"type": "string"},
-                },
-                "required": ["dest"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "file_by_id",
-            "description": (
-                "SOI preferred filing tool. Pass Changelog entry_id(s) or Inbox inbox_id only — "
-                "the host copies stored user_text. Do NOT paste turn bodies. "
-                "dest: 'identity' | 'voice' | 'psychology' | 'habits' | "
-                "'discard' | a leaf path like Hayden/Preferences/Food.json. File by content, not mode."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "entry_id": {
-                        "type": "string",
-                        "description": "One Changelog.json entry id (e.g. ad7b021d33e644d6)",
-                    },
-                    "id": {
-                        "type": "string",
-                        "description": "Alias for entry_id",
-                    },
-                    "entry_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Several related Changelog ids",
-                    },
-                    "inbox_id": {
-                        "type": "string",
-                        "description": "Hayden/Inbox/Captures.json capture id",
-                    },
-                    "dest": {
-                        "type": "string",
-                        "description": (
-                            "'identity' | 'voice' | 'psychology' | 'habits' | "
-                            "'discard' (greetings only) | or a Folderrules JSON leaf. "
-                            "Not Inbox. Not a dump for schedules/courses."
-                        ),
-                    },
-                    "summary": {"type": "string"},
-                },
-                "required": ["dest"],
-            },
-        },
-    },
 ]
 
 
@@ -1004,16 +841,44 @@ def tools_subset(names: tuple[str, ...] | list[str] | None = None) -> list[dict[
     return [t for t in TOOL_DEFINITIONS if t.get("function", {}).get("name") in wanted]
 
 
+def _tool_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().casefold()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
 def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
+    from ainet.logstore import log_item as log_item_fn
+    from ainet.logstore import query_db as query_db_fn
     from ainet.tools import project as project_mod
-    from ollama import file_by_id as file_by_id_mod
-    from ollama import file_note as file_note_mod
 
     return {
         "list_dir": lambda **kw: db.list_dir(kw.get("path", ".")),
         "tree": lambda **kw: db.tree(kw.get("path", "."), int(kw.get("max_depth", 3))),
         "read_text": lambda **kw: db.read_text(kw["path"]),
         "read_json": lambda **kw: db.read_json(kw["path"]),
+        "query_db": lambda **kw: query_db_fn(
+            db,
+            dest=str(kw.get("dest") or ""),
+            file=str(kw.get("file") or ""),
+            name=str(kw.get("name") or kw.get("label") or ""),
+            q=str(kw.get("q") or kw.get("query") or kw.get("words") or ""),
+            after=str(kw.get("after") or kw.get("since") or ""),
+            before=str(kw.get("before") or kw.get("until") or ""),
+            since_days=int(kw["since_days"]) if kw.get("since_days") not in (None, "") else None,
+            keys_only=_tool_bool(kw.get("keys_only"), False),
+            include_secrets=_tool_bool(kw.get("include_secrets"), False),
+            limit=int(kw.get("limit", 16)),
+        ),
         "write_json": lambda **kw: db.write_json(
             kw["path"],
             kw["data"],
@@ -1053,35 +918,12 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
             "ok": False,
             "error": "close_project is handled by the chat session host",
         },
-        "create_cop": lambda **kw: db.create_cop(
-            str(kw.get("path") or kw.get("folder_path") or ""),
-            str(kw.get("kind") or kw.get("cop_type") or ""),
-            summary=kw.get("summary"),
-        ),
         "move_path": lambda **kw: db.move_path(
             kw["src"], kw["dest"], summary=kw.get("summary")
-        ),
-        "archive_to_history": lambda **kw: db.archive_to_history(
-            kw["path"], history_dir=kw.get("history_dir"), summary=kw.get("summary")
         ),
         "append_changelog": lambda **kw: db.append_changelog(
             kw["action"], kw["path"], kw["summary"], kw.get("details")
         ),
-        "capture_inbox": lambda **kw: db.capture_inbox(
-            kw["text"],
-            tags=kw.get("tags"),
-            suggested_home=kw.get("suggested_home", ""),
-            source=kw.get("source", "conversation"),
-            summary=kw.get("summary"),
-        ),
-        "mark_read_stale": lambda **kw: db.mark_read_stale(
-            kw["folder_or_path"],
-            kw["summary"],
-            source_path=kw.get("source_path"),
-        ),
-        "refresh_read": lambda **kw: db.refresh_read(kw["read_path"], kw["digest"]),
-        "mark_read_refreshed": lambda **kw: db.mark_read_refreshed(kw["read_path"]),
-        "list_stale_reads": lambda **kw: db.list_stale_reads(),
         "web_search": lambda **kw: web_search(
             kw["query"],
             count=int(kw.get("count", 5)),
@@ -1148,20 +990,22 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
             list_only=bool(kw.get("list_only", False)),
             limit=int(kw.get("limit", 20)),
         ),
-        "file_by_id": lambda **kw: file_by_id_mod.file_by_id(
+        "log_item": lambda **kw: log_item_fn(
             db,
+            dest=str(kw.get("dest") or ""),
+            label=str(kw.get("label") or ""),
+            reason=str(kw.get("reason") or kw.get("text") or ""),
             entry_id=str(kw.get("entry_id") or kw.get("id") or ""),
             entry_ids=kw.get("entry_ids"),
-            inbox_id=str(kw.get("inbox_id") or ""),
-            dest=str(kw.get("dest") or ""),
             summary=kw.get("summary"),
         ),
-        "file_note": lambda **kw: file_note_mod.file_note(
+        "file_note": lambda **kw: log_item_fn(
             db,
+            dest=str(kw.get("dest") or ""),
+            label=str(kw.get("label") or kw.get("dest") or ""),
+            reason=str(kw.get("reason") or kw.get("text") or ""),
             entry_id=str(kw.get("entry_id") or kw.get("id") or ""),
             entry_ids=kw.get("entry_ids"),
-            dest=str(kw.get("dest") or ""),
-            text=str(kw.get("text") or ""),
             summary=kw.get("summary"),
         ),
         "get_tools": lambda **kw: catalog_tools(

@@ -1,4 +1,4 @@
-"""Background idle watcher — SOI Phase 1 (filing) then Phase 2 (Read refresh)."""
+"""Background idle watcher — SOI filing after OAC idle."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import threading
 import time
 from typing import Callable
 
+from ainet.logstore import decay_knowledge
 from ollama.config import OllamaConfig
 from ollama.session import ChatSession
 from ollama.soi_log import SOILogger
@@ -34,6 +35,7 @@ class IdleSOIWatcher:
         self._active = threading.Event()
         self._busy = threading.Lock()
         self._next_ok_at = 0.0
+        self._last_decay_at = 0.0
         self._thread = threading.Thread(target=self._loop, name="soi-idle", daemon=True)
         self.worker: SOIWorker | None = None
 
@@ -68,19 +70,9 @@ class IdleSOIWatcher:
         return {"started": True}
 
     def request_read_refresh(self) -> dict[str, bool | str]:
-        """Start Phase 2 Read refresh now — bypasses the automatic idle wait."""
-        if not self.start(force=True):
-            return {"started": False, "reason": "watcher failed to start"}
-        if self.busy:
-            return {"started": False, "reason": "already running"}
-        self._cancel_job.clear()
-        self._kick_phase = "read_refresh"
-        self._active.set()
-        self._kick.set()
-        return {"started": True}
+        return {"started": False, "reason": "phase 2 removed"}
 
     def cancel_job(self) -> dict[str, bool | str]:
-        """Stop an in-flight SOI filing/refresh as soon as practical."""
         self._cancel_job.set()
         self._kick.clear()
         self._kick_phase = None
@@ -115,7 +107,6 @@ class IdleSOIWatcher:
         logger.log(
             "watcher_start",
             soi_idle_seconds=self.config.soi_idle_seconds,
-            soi_read_refresh_idle_seconds=self.config.soi_read_refresh_idle_seconds,
             soi_timeout_s=self.config.soi_timeout_s,
         )
         while not self._stop.is_set():
@@ -123,7 +114,6 @@ class IdleSOIWatcher:
             if self._stop.is_set():
                 break
             kicked = self._kick.is_set()
-            kick_phase = self._kick_phase if kicked else None
             if kicked:
                 self._kick.clear()
                 self._kick_phase = None
@@ -132,97 +122,58 @@ class IdleSOIWatcher:
             idle = self.session.idle_seconds()
             if not self._busy.acquire(blocking=False):
                 if kicked:
-                    self._kick_phase = kick_phase
                     self._kick.set()
                 continue
             try:
                 worker.cancel_event = self._cancel_job
-
-                # Manual Phase 2 button — do not wait for idle, and do not run filing.
-                if kicked and kick_phase == "read_refresh":
-                    logger.log(
-                        "idle_wake",
-                        phase="read_refresh",
-                        idle_s=idle,
-                        kicked=True,
-                        stale_count=len(worker.list_stale_read_paths()),
-                    )
-                    result = worker.run_read_refresh()
-                    if result.get("cancelled"):
-                        logger.log("read_refresh_skip", reason="cancelled")
-                        continue
-                    if result.get("ran") is False:
-                        logger.log(
-                            "read_refresh_skip",
-                            reason=result.get("reason") or "no work",
-                        )
-                        continue
-                    if not result.get("ok"):
-                        self._next_ok_at = time.monotonic() + self.error_backoff_s
-                        logger.log(
-                            "backoff",
-                            seconds=self.error_backoff_s,
-                            reason=str(result.get("errors") or "read refresh failed"),
-                        )
+                idle_ready = kicked or idle >= self.config.soi_idle_seconds
+                if idle_ready and time.monotonic() - self._last_decay_at >= 900:
+                    try:
+                        pruned = decay_knowledge(self.session.db)
+                        self._last_decay_at = time.monotonic()
+                        if (
+                            pruned.get("dropped_keys")
+                            or pruned.get("dropped_entries")
+                            or pruned.get("files")
+                        ):
+                            logger.log(
+                                "decay",
+                                dropped_keys=pruned.get("dropped_keys"),
+                                dropped_entries=pruned.get("dropped_entries"),
+                                files=pruned.get("files"),
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.log("decay_error", level="error", error=str(exc))
+                can_file = worker.has_filing_work() and idle_ready
+                if not can_file:
                     continue
-
-                # Auto-filing waits for OAC idle; Start SOI (kick) runs immediately.
-                can_file = worker.has_filing_work() and (
-                    kicked or idle >= self.config.soi_idle_seconds
+                logger.log(
+                    "idle_wake",
+                    phase="filing",
+                    idle_s=idle,
+                    kicked=bool(kicked),
+                    pending_changelog=len(worker.pending_changelog()),
                 )
-                if can_file:
-                    logger.log(
-                        "idle_wake",
-                        phase="filing",
-                        idle_s=idle,
-                        kicked=bool(kicked),
-                        pending_changelog=len(worker.pending_changelog()),
-                        pending_inbox=len(worker.pending_inbox()),
-                    )
-                    result = worker.run_filing()
-                    if result.get("cancelled"):
-                        logger.log("filing_skip", reason="cancelled")
-                        continue
-                    if not result.get("ok"):
-                        self._next_ok_at = time.monotonic() + self.error_backoff_s
-                        logger.log(
-                            "backoff",
-                            seconds=self.error_backoff_s,
-                            reason=result.get("error") or "filing failed",
-                        )
-                    elif int(result.get("left_pending") or 0) and not int(
-                        result.get("marked_filed") or 0
-                    ) and not int(result.get("marked_discarded") or 0):
-                        self._next_ok_at = time.monotonic() + self.error_backoff_s
-                        logger.log(
-                            "backoff",
-                            seconds=self.error_backoff_s,
-                            reason="filing produced no placements",
-                        )
+                result = worker.run_filing()
+                if result.get("cancelled"):
+                    logger.log("filing_skip", reason="cancelled")
                     continue
-
-                if (
-                    not worker.has_filing_work()
-                    and worker.needs_read_refresh()
-                    and idle >= self.config.soi_read_refresh_idle_seconds
-                ):
+                if not result.get("ok"):
+                    self._next_ok_at = time.monotonic() + self.error_backoff_s
                     logger.log(
-                        "idle_wake",
-                        phase="read_refresh",
-                        idle_s=idle,
-                        stale_count=len(worker.list_stale_read_paths()),
+                        "backoff",
+                        seconds=self.error_backoff_s,
+                        reason=result.get("error") or "filing failed",
                     )
-                    result = worker.run_read_refresh()
-                    if result.get("cancelled"):
-                        logger.log("read_refresh_skip", reason="cancelled")
-                        continue
-                    if not result.get("ok"):
-                        self._next_ok_at = time.monotonic() + self.error_backoff_s
-                        logger.log(
-                            "backoff",
-                            seconds=self.error_backoff_s,
-                            reason=str(result.get("errors") or "read refresh failed"),
-                        )
+                elif int(result.get("left_pending") or 0) and not int(
+                    result.get("marked_filed") or 0
+                ) and not int(result.get("marked_discarded") or 0):
+                    self._next_ok_at = time.monotonic() + self.error_backoff_s
+                    logger.log(
+                        "backoff",
+                        seconds=self.error_backoff_s,
+                        reason="filing produced no placements",
+                    )
             except Exception as exc:  # noqa: BLE001 — keep chat loop alive
                 self._next_ok_at = time.monotonic() + self.error_backoff_s
                 logger.log("error", level="error", error=str(exc))

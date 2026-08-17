@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -14,22 +13,13 @@ from ainet.tools.paths import normalize_relpath
 PROJECTS_ROOT = "Projects"
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
 
-# Seeded into every new project (JSON via defaults + folders).
+# Seeded into every new project.
 _PROJECT_FILES = (
-    "Read.json",
-    "History.json",
-    "Notes.json",
-    "Plan.json",
-    "Profile.json",
+    "project.json",
 )
 _PROJECT_DIRS = (
     "Files",
-    "History",
 )
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _slug_name(name: str) -> str:
@@ -87,12 +77,18 @@ def list_projects(db: DatabaseTools) -> dict[str, Any]:
             continue
         rel = f"{PROJECTS_ROOT}/{child.name}"
         summary = ""
-        read_path = child / "Read.json"
-        if read_path.is_file():
+        project_file = child / "project.json"
+        if project_file.is_file():
             try:
-                data = db.read_json(f"{rel}/Read.json").get("data") or {}
+                data = db.read_json(f"{rel}/project.json").get("data") or {}
                 if isinstance(data, dict):
-                    summary = str(data.get("summary") or data.get("state") or "")[:200]
+                    keys = [
+                        str(k)
+                        for k, v in data.items()
+                        if str(k).casefold() not in {"version", "name", "summary", "items"}
+                        and isinstance(v, list)
+                    ]
+                    summary = ", ".join(keys[:6])
             except Exception:
                 pass
         rows.append({"name": child.name, "path": rel, "summary": summary})
@@ -105,7 +101,7 @@ def create_project(
     name: str,
     summary: str = "",
 ) -> dict[str, Any]:
-    """Create Projects/<Name>/ with Read/History/Notes/Plan/Profile + Files/History/."""
+    """Create Projects/<Name>/ with project.json + Files/."""
     folder = project_path(name)
     target = db.paths.resolve(folder)
     created: list[str] = []
@@ -125,22 +121,14 @@ def create_project(
             db.create_folder(path, summary=f"Project folder {dirname}")
             created.append(path)
 
-    now = _utc_now()
     for filename in _PROJECT_FILES:
         path = f"{folder}/{filename}"
         if db.paths.resolve(path).exists():
             continue
         data = load_default_for_path(path)
-        if isinstance(data, dict) and filename == "Read.json":
+        if isinstance(data, dict) and filename == "project.json":
             data = dict(data)
-            data["summary"] = (summary or f"Project {PurePosixPath(folder).name}").strip()[:400]
-            data["state"] = "active"
-            data["last_updated"] = now
-            data["needs_update"] = False
-            data["read_changelog"] = []
-        if isinstance(data, dict) and filename == "Profile.json":
-            data = dict(data)
-            data.setdefault("name", PurePosixPath(folder).name)
+            data["name"] = PurePosixPath(folder).name
             if summary:
                 data["summary"] = summary[:400]
         db.write_json(path, data, create=True, summary=f"Seed {filename} for {folder}")

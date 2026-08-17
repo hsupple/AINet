@@ -7,92 +7,75 @@ These rules are READ-ONLY for the AI. Only a human (or privileged setup code) ma
    - All AI filesystem tools operate only under the database root (`db/`).
    - Path traversal outside the database root is forbidden.
    - The PC that runs Ollama and these database tools is a Windows machine.
-   - All paths inside the database use forward slashes (`Hayden/Read.json`) even on Windows.
+   - All paths inside the database use forward slashes (`hayden.json`, `Projects/BOMB/project.json`) even on Windows.
    - Never use drive letters, UNC shares, or backslash-only absolute paths in tool calls.
 
 2. Protected files
    - Rules.txt: AI may read. AI must never write, rename, move, or delete.
    - Calendar.json: AI may read. Writes are code-only (scheduler/system), never AI tools.
-   - Hayden/Preferences/Music/Spotify.json: host log of every Spotify tool call (Hayden's ask, time, full args + result). AI may read. Never write, rename, move, or delete.
    - Changelog.json: pending OAC→SOI queue only. AI must not rewrite. Tool writes and filed/discarded turns are appended to Masterlog.json (kept forever).
-   - Masterlog.json: append-only permanent archive of filed/discarded oac_turns (full user_text/assistant_text + filed_to). Never delete or rewrite. AI may read.
+   - Masterlog.json: append-only permanent archive of filed/discarded oac_turns. Never delete or rewrite. AI may read.
 
-3. Efficiency / COP load order
-   - For a COP, load in this order: Read.json → Plan.json → History.json only if needed → Profile.json almost never in live talk.
-   - Profile.json is cold human-readable identity; dormant compaction may update it when identity drifts.
-   - Read.json is a SHORT hot index/summary surface only — never a dump of the folder. OAC deep-dives into sibling leaves via tools when more detail is needed.
-   - Read belongs: short summary + state; small priority lists (important_context, active_items, recent_changes, known_facts, uncertainties); path pointers to deeper files; needs_update + read_changelog freshness metadata.
-   - Read does not belong: long narratives, duplicated leaf content, bulk history, full folder dumps.
-   - Practical caps (enforced on write): summary≤400 chars, state≤160, item strings≤180 chars;
-     important_context≤12, active_items≤10, recent_changes≤8, known_facts≤12, uncertainties≤8; whole Read ≤~12KB.
-     Oversized Writes are auto-trimmed (note in read_changelog) or rejected if still too large.
-   - When refreshing a Read, compress/roll excess into the correct leaf files or History; prefer pointers over inlining.
-   - Keep active JSON files small. Roll stale bulk files into the nearest History/ folder.
-   - Do not duplicate the same fact across many files; update the canonical location (usually a leaf; Read only holds a short digest/pointer).
+3. Flat knowledge files
+   - Personal knowledge lives in a handful of JSON files at db/ root — not nested folders.
+   - Each file (and each hayden.json section) is a map of named keys to observation lists:
+       "Name": [{"time": "...", "text": "..."}]
+     SOI log_item creates the key if missing, then appends. Do not use items[].
+   - count and strength are host-computed. Strength is linear decay: remaining = 1 - age/lifetime.
+     lifetime interpolates from low_days (1 mention) to high_days (5+ mentions). Tune in Folderrules.json decay.
+     When remaining drops below floor (0.05), the host deletes that observation; empty/dead keys are removed.
+     secrets.json decays on query but is never auto-deleted.
+   - OAC retrieves with query_db (name, words, after/before/since_days). Do not dump whole files first.
+       hayden.json     — who Hayden is: characteristics, preferences, habits, values, desires, body, psychology (each a name→list map)
+       people.json     — people keyed by name
+       questions.json  — topics keyed by name
+       household.json  — home, pantry, repairs
+       memories.json   — life events
+       secrets.json    — private vault
+       Projects/<Name>/project.json — named projects (the only folders besides host runtime)
+       Calendar.json   — upcoming calendar (code-only writes). There is no planner.json.
+   - Do not invent extra personal folders. Projects/<Name>/ is the exception (plus Files/ inside a project).
 
-4. Hayden personal knowledge
-   - Hayden/ is the full personal model: Identity, Values, Preferences, Habits, Desires, Relationships, Secrets, Memories, Body, Psychology, Inbox.
-   - Questions/ is a top-level domain (not under Hayden/). Filed science/technical/factual Q&A lives at Questions/Notes.json and Questions/History.json. Never use Hayden/Questions.
-   - Always start at Hayden/Read.json, then open the relevant subtree Read.json (e.g. Relationships/Read.json) before deep files. For "questions I've asked," go to Questions/.
-   - People live at Hayden/Relationships/People/<Name>.json (Person template).
-   - Multiple sides of Hayden live in Identity/Sides.json — treat sides as real, not contradictions to erase.
-   - Goal: know Hayden inside and out. Prefer writing lasting truth into the right leaf file over stuffing Hayden/Read.json.
-   - If something lasting has no clear home, SOI may use Hayden/Inbox/Captures.json. Ephemeral chatter stays out of the DB.
-
-4b. Dual AI roles
-   - AI1 OAC (Orchestrator of Conversation): live interface. READ tools + web_search/web_fetch.
-     Short-term chat lives in db/Chats/ (host-owned log; left-rail history). OAC cannot use general DB writes.
-   - Every OAC user turn is stacked onto Changelog.json as action=oac_turn with full user_text (and assistant_text) and soi_status=pending. After SOI files or discards it, the host appends that entry to Masterlog.json (kept forever) and drops it from the Changelog queue. Nothing is deleted from Masterlog.
-   - AI2 SOI (Slave of Information) has two phases:
-       Phase 1 filing — after OAC idle soi_idle_seconds (default 45s): process pending oac_turn + unfiled Inbox; mutate DB; mark changelog entries filed/discarded.
-         File by CONTENT, never by OAC mode_id.
-         dest=Questions is allowed (science/technical Q&A); other create_under roots
-         require a child folder. Never dest=Research.
-         Same-session turns are chronological — resolve pronouns from earlier turns;
-         same-topic threads MAY merge into one synthesized note per dest (entry_ids).
-         One turn with several kinds of fact (friends + feelings + wants) is filed
-         once per dest with a dest-specific note, not dumped into a single folder.
-         Discard greetings and acknowledgment-only turns (ok, yeah, cool, go on).
-         Host only marks soi_status filed/discarded with evidence: real tool mutations
-         or ephemeral discard. JSON-only SOI replies leave
-         entries pending. filed/discarded lists must use real Changelog entry ids.
-         Lasting writes auto-append to that folder's Read.json read_changelog and set needs_update=true (mark_read_stale helper).
-       Phase 2 Read refresh — only when filing queue is clear AND OAC idle soi_read_refresh_idle_seconds (default 600s / 10m):
-         discover ONLY Read.json with needs_update=true; rewrite those short digests (do not dump into Notes);
-         observe speech/tone/swearing/personality evidence from Masterlog into Identity/Voice.json;
-         then mark_read_refreshed.
-   - SOI state lives under db/runtime/soi/. OAC must not mutate the personal DB; host/runtime owns Changelog handoff writes.
+4. Dual AI roles
+   - AI1 OAC (Orchestrator of Conversation): live interface. READ tools + web_search/web_fetch/spotify.
+     Short-term chat lives in db/Chats/ (host-owned). OAC cannot use general DB writes.
+     Retrieval: query_db (name, words, dates). read_json is for dumping a whole file when needed.
+   - Every OAC user turn is stacked onto Changelog.json as action=oac_turn with user_text and soi_status=pending.
+     After SOI files or discards it, the host appends that entry to Masterlog.json and drops it from the Changelog queue.
+   - AI2 SOI (Slave of Information) files pending oac_turns after OAC idle (soi_idle_seconds, default 180s).
+       One tool: log_item(dest, label, reason, entry_id).
+       label is the key (person name, trait, topic). Host creates "Name": [] if missing, then appends {time, text}.
+       dest is one of: hayden, preferences, habits, values, desires, body, psychology, people, questions, household, memories, secrets, discard, or a project name.
+       Near-term schedule/todos are dest=discard until Calendar exists.
+       Reuse an existing key when it is the same person/trait/topic (see the labels list in the batch).
+       Split a turn: people AND feelings AND a want → three log_item calls, same entry_id, different dest/label.
+       Discard greetings and acknowledgment-only turns.
+       Host only marks soi_status filed/discarded when log_item actually ran (or dest=discard).
+   - SOI state lives under db/runtime/soi/. OAC must not mutate the personal DB.
 
 5. Secrets
-   - Hayden/Secrets/ is a private vault. The AI may read it to understand Hayden.
-   - Default: use secrets for understanding and better help; do NOT volunteer secret contents in spoken/output speech.
+   - secrets.json is a private vault. The AI may read it to understand Hayden.
+   - Default: use secrets for understanding; do NOT volunteer secret contents in spoken output.
    - Only name or narrate a secret if Hayden explicitly asks, or if withholding it would cause clear harm/safety issues.
-   - When advice depends on a secret, ask before revealing it, or speak in careful generalities.
 
 6. Structure
-   - Respect Folderrules.json for naming, allowed parents, and COP templates.
-   - Standard COP docs: Profile.json, Read.json, Plan.json, History.json (plus Decisions / Open Questions on projects).
-   - Under Hayden/, SOI may create nested folders/files as needed for personal knowledge.
-   - Domain roots Hayden/, School/, Work/, Household/ must not be deleted or renamed by the AI.
-   - db/runtime/ is host-owned short-term state (OAC sessions, SOI cursor).
+   - Respect Folderrules.json for naming and allowed create locations.
+   - Domain knowledge files at db/ root must not be deleted or renamed by the AI.
+   - db/runtime/ is host-owned short-term state (OAC sessions, SOI cursor, Spotify tokens).
    - db/Chats/ is the host-owned chat log. AI tools cannot read or write it.
 
 7. Mutations
-   - Prefer patch_json over full write_json when updating existing documents.
-   - Prefer capture_inbox for unsorted lasting scraps (SOI).
-   - Every successful mutating tool call must produce a changelog entry.
-   - Lasting content writes auto-mark the nearest folder Read.json stale (needs_update + read_changelog). Writing Read.json itself does not re-mark stale.
-   - After SOI Read refresh, call mark_read_refreshed (host also clears remaining stale gates after a successful domain run).
-   - Never invent paths that break COP conventions (Profile / Read / Plan / History / Files).
+   - SOI files only via log_item. Do not patch_json/write_json the knowledge files.
+   - Inside a focused project, OAC may create subfolders and text files under Projects/<Name>/ only.
+   - Every successful mutating tool call is archived to Masterlog.json.
+   - Never invent nested Hayden/School/Work/Household trees. Those are gone.
 
 8. Honesty
    - If a tool call is denied, say so. Do not pretend the database changed.
 
 9. Internet search (Brave)
    - Tools: web_search (Brave Search API) and web_fetch (plain-text URL fetch). Available to OAC
-     (read-only live) and SOI (full catalog). Prefer web_search for external facts; do not invent.
-   - API key: set environment variable BRAVE_API_KEY or AINET_BRAVE_API_KEY to your Brave Search
-     API subscription token (https://brave.com/search/api/). If the key is missing, web_search
-     fails clearly — create a free Brave Search API key and export it before relying on search.
+     (read-only live) and SOI (log_item only — SOI does not search).
+   - API key: set environment variable BRAVE_API_KEY or AINET_BRAVE_API_KEY.
    - Windows: set via System Environment Variables, or in PowerShell for the session:
        $env:BRAVE_API_KEY = "your_token_here"

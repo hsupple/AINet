@@ -18,16 +18,18 @@ from ainet.tools.project import (
 )
 from ainet.tools.registry import PROJECT_SESSION_TOOLS, catalog_tools, dispatch, tools_subset
 from ollama.client import OllamaCancelled, OllamaClient, OllamaError, ThinkingCallback, TokenCallback
-from ollama.content_filing import cop_name_in_text
+from ollama.personal_query import build_query_db_args, looks_like_personal_db_query
 from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
 from ollama.convo_memory import (
     VisibleTokenFilter,
+    enrich_web_search_query,
     extract_http_urls,
     host_fallback_memory,
     last_turn_block,
     memory_system_suffix,
     split_reply,
+    standing_request,
 )
 from ollama.conversation_store import ConversationStore
 from ollama.prompts.shared import CURRENT_DATE_TOKEN, today_context
@@ -49,15 +51,11 @@ _MUTATING = {
     "patch_json",
     "set_json_path",
     "create_folder",
-    "create_cop",
     "create_project",
     "move_path",
-    "archive_to_history",
     "append_changelog",
-    "capture_inbox",
-    "file_by_id",
+    "log_item",
     "file_note",
-    "refresh_read",
 }
 
 # Qwen3 sometimes answers with only the hidden %%mem%% block; resample instead.
@@ -414,12 +412,18 @@ class ChatSession:
         self._turn_user_text = user_text
         self._trim_history()
 
+        self.last_tool_names: list[str] = []
+        self.last_mutating_calls: list[dict[str, Any]] = []
+        self.last_tool_rounds = 0
+
         if self.mode.role == "oac":
             opened = self._maybe_host_open_links(
                 user_text, on_token=on_token, on_tool=on_tool
             )
             if opened is not None:
                 return opened
+            if not self.project_root and looks_like_personal_db_query(user_text):
+                self._host_prefetch_query_db(user_text, on_tool=on_tool)
 
         tools = self._active_tools()
         if on_context is not None:
@@ -432,9 +436,6 @@ class ChatSession:
         empty_rounds = 0
         streamed_any = False
         streamed_parts: list[str] = []
-        self.last_tool_names: list[str] = []
-        self.last_mutating_calls: list[dict[str, Any]] = []
-        self.last_tool_rounds = 0
         seen_tool_keys: set[str] = set()
         think = self.config.soi_think if self.mode.role == "soi" else self.config.oac_think
         req_timeout = (
@@ -456,15 +457,11 @@ class ChatSession:
                 on_token(delta)
 
         extra_mutating = {
-            "mark_read_stale",
-            "mark_read_refreshed",
             "save_research",
         }
         extra_opts = None
         if self.mode.role == "soi":
-            # Phase 2 may emit several leaf patches + refresh_read.
-            predict = 1800 if self.mode.id == "soi_test_p2" else 900
-            extra_opts = {"temperature": 0, "num_predict": predict}
+            extra_opts = {"temperature": 0, "num_predict": 900}
         elif self.mode.id == "deep_research":
             extra_opts = {"temperature": 0.2, "num_predict": 2800}
         max_rounds = self.config.max_tool_rounds
@@ -558,6 +555,15 @@ class ChatSession:
                     if self.mode.role == "soi":
                         name, args = normalize_soi_tool(name, args)
                         call = {"function": {"name": name, "arguments": args}}
+                    elif name == "web_search" and self.mode.role == "oac":
+                        if looks_like_personal_db_query(user_text):
+                            name = "query_db"
+                            args = build_query_db_args(user_text)
+                            call = {"function": {"name": name, "arguments": args}}
+                        else:
+                            args, enriched = self._maybe_enrich_web_search(args, user_text)
+                            if enriched:
+                                call = {"function": {"name": name, "arguments": args}}
                     if not name:
                         continue
                     tool_key = self._tool_call_key(name, args)
@@ -726,6 +732,27 @@ class ChatSession:
         if (
             hide_mem
             and self.mode.role == "oac"
+            and not (final_text or "").strip()
+            and looks_like_personal_db_query(user_text)
+        ):
+            if "query_db" not in (self.last_tool_names or []):
+                self._host_prefetch_query_db(user_text, on_tool=on_tool)
+            retry = self._retry_answer_after_db(
+                user_text,
+                stream=stream,
+                on_token=on_token,
+                on_thinking=on_thinking,
+                think=think,
+                req_timeout=req_timeout,
+                vis_filter=vis_filter,
+            )
+            if retry:
+                final_text = retry
+                streamed_parts = [retry]
+
+        if (
+            hide_mem
+            and self.mode.role == "oac"
             and self._turn_had_web_evidence()
             and self._looks_like_stale_clarifier(final_text or "", user_text)
         ):
@@ -886,6 +913,128 @@ class ChatSession:
         visible, _mem = split_reply(content)
         return (visible or content).strip()
 
+    def _host_prefetch_query_db(
+        self,
+        user_text: str,
+        *,
+        on_tool: ToolCallback | None = None,
+    ) -> bool:
+        """Run query_db before the model turn so personal asks never hit the open web."""
+        args = build_query_db_args(user_text)
+        if on_tool:
+            on_tool("start", "query_db", {"arguments": args})
+        result = dispatch(self.db, "query_db", args)
+        if on_tool:
+            on_tool(
+                "done",
+                "query_db",
+                {
+                    "ok": bool(result.get("ok", True)) if isinstance(result, dict) else True,
+                    "summary": self._tool_result_summary("query_db", result)
+                    if isinstance(result, dict)
+                    else "ok",
+                },
+            )
+        payload = self._truncate_tool_result(
+            "query_db", result if isinstance(result, dict) else {"ok": False, "error": "bad result"}
+        )
+        self.messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "query_db",
+                            "arguments": json.dumps(args, ensure_ascii=False),
+                        },
+                    }
+                ],
+            }
+        )
+        self.messages.append(
+            {"role": "tool", "content": json.dumps(payload, ensure_ascii=False)}
+        )
+        names = getattr(self, "last_tool_names", None)
+        if names is None:
+            self.last_tool_names = []
+            names = self.last_tool_names
+        names.append("query_db")
+        return True
+
+    def _retry_answer_after_db(
+        self,
+        user_text: str,
+        *,
+        stream: bool,
+        on_token: TokenCallback | None,
+        on_thinking: ThinkingCallback | None,
+        think: bool,
+        req_timeout: float,
+        vis_filter: VisibleTokenFilter | None,
+    ) -> str:
+        """One forced answer pass when the model skipped query_db on a personal ask."""
+        if self.messages and self.messages[-1].get("role") == "assistant":
+            tail = str(self.messages[-1].get("content") or "").strip()
+            if not tail and not self._has_tool_calls(self.messages[-1]):
+                self.messages.pop()
+        self.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Host note: query_db already returned Hayden's stored facts for "
+                    f"{user_text!r}. Answer from those database matches now. "
+                    "Do not web_search. Do not ask clarifying questions."
+                ),
+            }
+        )
+        try:
+            if stream and (on_token is not None or on_thinking is not None):
+
+                def _tok(delta: str) -> None:
+                    if vis_filter is not None:
+                        vis_filter.feed(delta)
+                    elif on_token is not None:
+                        on_token(delta)
+
+                response = self.client.chat_stream(
+                    self.messages,
+                    tools=None,
+                    think=think,
+                    timeout_s=req_timeout,
+                    on_token=_tok if on_token is not None else None,
+                    on_thinking=on_thinking,
+                    should_cancel=self.cancelled,
+                )
+            else:
+                response = self.client.chat(
+                    self.messages,
+                    tools=None,
+                    think=think,
+                    timeout_s=req_timeout,
+                )
+        except Exception:
+            return ""
+        message = response.get("message") or {}
+        self.messages.append(message)
+        content = str(message.get("content") or "")
+        visible, _mem = split_reply(content)
+        return (visible or content).strip()
+
+    def _maybe_enrich_web_search(
+        self, args: dict[str, Any], user_text: str
+    ) -> tuple[dict[str, Any], bool]:
+        raw_q = args.get("query")
+        query = str(raw_q or "").strip()
+        topic = standing_request(self.convo_memory)
+        new_q, changed = enrich_web_search_query(query, user_text, topic)
+        if not changed:
+            return args, False
+        out = dict(args)
+        out["query"] = new_q
+        return out, True
+
     @staticmethod
     def _tool_call_key(name: str, args: dict[str, Any]) -> str:
         try:
@@ -953,6 +1102,8 @@ class ChatSession:
         if name in {"read_json", "read_text"}:
             path = result.get("path") or ""
             return path or "ok"
+        if name == "query_db":
+            return f"{result.get('count', 0)} matches"
         if name in {"list_dir", "tree"}:
             kids = result.get("children") or result.get("entries")
             if isinstance(kids, list):
@@ -1607,19 +1758,6 @@ class ChatSession:
             args = dict(args)
             args["open_google"] = False
 
-        if self.mode.role == "soi" and name in {"create_cop", "create_folder"}:
-            path = str(args.get("path") or args.get("folder_path") or "")
-            if "/Courses/" in path.replace("\\", "/") or "/Projects/" in path.replace("\\", "/"):
-                src = self._soi_source_text()
-                if src and not cop_name_in_text(path, src):
-                    return {
-                        "ok": False,
-                        "error": (
-                            f"{name} refused — {path} is not named in user_text. "
-                            "Do not invent COPs."
-                        ),
-                    }
-
         if name == "open_chrome":
             guard = self._reject_non_web_chrome(args)
             if guard is not None:
@@ -1666,27 +1804,15 @@ class ChatSession:
             "ok": False,
             "error": (
                 "open_chrome is for http(s) web pages only, and this is not one. "
-                "Database files are already readable with read_json or read_text — "
-                "read the file and answer Hayden directly instead of opening anything."
+                "Database files are already readable with query_db, read_json, or read_text — "
+                "query or read the file and answer Hayden directly instead of opening anything."
             ),
         }
 
     def _reject_soi_folder_scope(
         self, name: str, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Phase 2 may only mutate the current folder's specialty leaves + Read.json."""
-        from ollama.filing_payload import assert_phase2_patch_path, assert_phase2_read_path
-
-        folder = str(self.soi_folder_scope or "").strip()
-        if not folder:
-            return None
-        try:
-            if name == "patch_json":
-                assert_phase2_patch_path(folder, str(args.get("path") or ""))
-            elif name == "refresh_read":
-                assert_phase2_read_path(folder, str(args.get("read_path") or ""))
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
+        _ = name, args
         return None
 
     def _prefer_create_project(
@@ -1776,6 +1902,9 @@ class ChatSession:
             "getTools",
             "save_research",
             "inspect_research",
+            "query_db",
+            "log_item",
+            "file_note",
         }:
             return args
 

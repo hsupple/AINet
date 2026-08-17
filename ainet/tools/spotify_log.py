@@ -1,6 +1,6 @@
-"""Host-owned Spotify tool log under Hayden/Preferences/Music/Spotify.json.
+"""Host-owned Spotify tool log under runtime/spotify/log.json.
 
-AI may read this file. Only the host appends — never AI write tools.
+Only the host appends. Hidden from AI listings (runtime/).
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from ainet.tools.fsutil import atomic_write_text
 from ainet.tools.ops import DatabaseTools
 from ainet.tools.paths import DbPaths
 
-LOG_PATH = "Hayden/Preferences/Music/Spotify.json"
+LOG_PATH = "runtime/spotify/log.json"
 _LOCK = threading.Lock()
 
 
@@ -42,7 +42,7 @@ def _json_safe(value: Any) -> Any:
 
 
 def ensure_log_file(root: Path) -> Path:
-    path = Path(root) / "Hayden" / "Preferences" / "Music" / "Spotify.json"
+    path = Path(root) / "runtime" / "spotify" / "log.json"
     if path.is_file():
         return path
     path.parent.mkdir(parents=True, exist_ok=True)

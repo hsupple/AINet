@@ -503,19 +503,12 @@ class ChatApp:
             }
 
     def run_soi_phase2(self) -> dict[str, Any]:
-        from ainet.tools.ops import DatabaseTools
-
-        db = DatabaseTools(self.config.db_root)
-        stale = list(db.list_stale_reads().get("paths") or [])
-        kicked = self.watcher.request_read_refresh()
         with self.lock:
             return {
                 "ok": True,
-                "started": bool(kicked.get("started")),
-                "reason": kicked.get("reason") or "",
+                "started": False,
+                "reason": "phase 2 removed — knowledge files need no compaction",
                 "phase": "read_refresh",
-                "stale_reads": stale,
-                "stale_count": len(stale),
                 **self.status(),
             }
 

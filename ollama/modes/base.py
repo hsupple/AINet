@@ -10,6 +10,7 @@ READ_TOOLS = (
     "tree",
     "read_text",
     "read_json",
+    "query_db",
     "web_search",
     "web_fetch",
     "image_search",
@@ -18,8 +19,8 @@ READ_TOOLS = (
     "spotify",
     "list_projects",
 )
-WRITE_LIGHT = ("patch_json", "set_json_path", "create_json", "write_json", "capture_inbox")
-STRUCT_TOOLS = ("create_folder", "create_cop", "move_path", "archive_to_history")
+WRITE_LIGHT = ("patch_json", "set_json_path", "create_json", "write_json")
+STRUCT_TOOLS = ("create_folder", "move_path")
 META_TOOLS = ("get_tools",)
 PROJECT_TOOLS = ("create_project", "list_projects", "open_project", "close_project")
 

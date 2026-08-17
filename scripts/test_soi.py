@@ -46,12 +46,7 @@ from ollama.session import ChatSession, _MUTATING
 from ollama.soi_worker import SOIWorker
 
 # Tools that change durable or runtime state (beyond the session _MUTATING set).
-_EXTRA_MUTATING = frozenset(
-    {
-        "mark_read_stale",
-        "mark_read_refreshed",
-    }
-)
+_EXTRA_MUTATING = frozenset()
 _ALL_MUTATING = _MUTATING | _EXTRA_MUTATING
 
 

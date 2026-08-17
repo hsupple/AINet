@@ -1,0 +1,8 @@
+{
+  "_ainet": {
+    "doc": "project.json",
+    "role": "Named notes for one project. Extra keys besides version/name/summary are observation lists."
+  },
+  "version": 1,
+  "name": ""
+}

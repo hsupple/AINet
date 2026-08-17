@@ -1,0 +1,14 @@
+{
+  "_ainet": {
+    "doc": "hayden.json",
+    "role": "Who Hayden is. Each section is a map of name → [{time, text}, ...]."
+  },
+  "version": 1,
+  "characteristics": {},
+  "preferences": {},
+  "habits": {},
+  "values": {},
+  "desires": {},
+  "body": {},
+  "psychology": {}
+}

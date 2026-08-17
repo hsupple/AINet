@@ -75,6 +75,50 @@ def host_fallback_memory(user_text: str, assistant_text: str, prior: str = "") -
     )
 
 
+_VAGUE_SEARCH_RE = re.compile(
+    r"\b(?:"
+    r"search\s+(?:it\s+)?up|look\s+(?:it\s+)?up|just\s+search|go\s+ahead\s+and\s+search|"
+    r"yeah[\s,]+search|search\s+for\s+(?:it|that)|find\s+(?:me\s+)?(?:a\s+)?vids?\b|"
+    r"find\s+(?:me\s+)?(?:a\s+)?videos?\b|get\s+(?:me\s+)?(?:a\s+)?vids?\b|"
+    r"get\s+(?:me\s+)?(?:a\s+)?videos?\b"
+    r")\b",
+    re.I,
+)
+_VIDEO_HINT_RE = re.compile(r"\b(?:vids?\b|videos?\b|youtube|youtu\.be|watch\b|clip\b|tutorial\b)\b", re.I)
+
+
+def standing_request(memory: str) -> str:
+    return _memory_fields(memory).get("standing request", "").strip()
+
+
+def is_vague_search_followup(user_text: str) -> bool:
+    raw = " ".join((user_text or "").split())
+    if not raw:
+        return False
+    if _VAGUE_SEARCH_RE.search(raw):
+        return True
+    if _VIDEO_HINT_RE.search(raw) and len(raw.split()) <= 8 and not _looks_like_new_question(user_text):
+        return True
+    return False
+
+
+def enrich_web_search_query(query: str, user_text: str, standing: str) -> tuple[str, bool]:
+    """When Hayden's follow-up is vague, search the standing request instead of a bad guess."""
+    topic = " ".join((standing or "").split()).strip()
+    if not topic or not is_vague_search_followup(user_text):
+        return " ".join((query or "").split()).strip(), False
+
+    user = " ".join((user_text or "").split())
+    if _VIDEO_HINT_RE.search(user):
+        new_q = f"{topic} tutorial video"
+    else:
+        new_q = topic
+
+    new_q = new_q[:200].strip()
+    old_q = " ".join((query or "").split()).strip()
+    return new_q, new_q.casefold() != old_q.casefold()
+
+
 def _looks_like_new_question(text: str) -> bool:
     raw = " ".join((text or "").split())
     if len(raw.split()) < 3:

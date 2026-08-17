@@ -29,7 +29,6 @@ class Action(str, Enum):
 PROTECTED_READ_ONLY = {"rules.txt"}
 CODE_ONLY_WRITE = {
     "calendar.json",
-    "hayden/preferences/music/spotify.json",
 }
 APPEND_ONLY = {"changelog.json", "masterlog.json"}
 _TEXT_EXT = {
@@ -107,6 +106,10 @@ class FolderRules:
 
     def cop_template(self, kind: str) -> list[str]:
         return list(self.raw.get("cop_templates", {}).get(kind, []))
+
+    @property
+    def knowledge_files(self) -> set[str]:
+        return {str(n).replace("\\", "/").casefold() for n in self.raw.get("knowledge_files", [])}
 
 
 class Permissions:
@@ -186,6 +189,11 @@ class Permissions:
                 raise PermissionError_(f"{rel} cannot be restructured by the AI.")
             return
 
+        if key in self.rules.knowledge_files:
+            if action in {Action.DELETE, Action.MOVE, Action.CREATE_DIR}:
+                raise PermissionError_(f"Knowledge file cannot be removed or renamed: {rel}")
+            return
+
         if key == "folderrules.json":
             if action == Action.READ:
                 return
@@ -203,10 +211,15 @@ class Permissions:
     def _assert_create_location(self, relative: str, action: Action) -> None:
         posix = PurePosixPath(relative)
         parent = posix.parent.as_posix()
-        if parent == ".":
-            raise PermissionError_("AI cannot create new top-level entries.")
-
         name = posix.name
+        if parent == ".":
+            if name.casefold() in self.rules.knowledge_files:
+                if action == Action.CREATE_FILE:
+                    kind = "json" if name.lower().endswith(".json") else "file"
+                    self.assert_name_ok(name, kind=kind)
+                    return
+                raise PermissionError_("AI cannot create new top-level entries.")
+            raise PermissionError_("AI cannot create new top-level entries.")
         if action == Action.CREATE_FILE:
             kind = "json" if name.lower().endswith(".json") else "file"
             self.assert_name_ok(name, kind=kind)
@@ -219,30 +232,7 @@ class Permissions:
             if parent == prefix or parent.startswith(prefix + "/"):
                 return
 
-        domains = {d.casefold() for d in self.rules.domains}
-        if parent.casefold() in domains and action == Action.CREATE_FILE:
-            return
-
         parts = posix.parts
-        if (
-            self.rules.nested_under_project_allowed()
-            and len(parts) >= 3
-            and parts[0].casefold() == "work"
-            and parts[1].casefold() == "projects"
-        ):
-            return
-
-        if (
-            len(parts) >= 3
-            and parts[0].casefold() == "school"
-            and parts[1].casefold() == "courses"
-        ):
-            return
-
-        # Full personal tree under Hayden/ may grow freely (not the domain root itself).
-        if parts[0].casefold() == "hayden" and len(parts) >= 2:
-            return
-
         # User Projects/ tree (Projects/<Name>/...) may grow freely.
         if parts[0].casefold() == "projects" and len(parts) >= 2:
             return
