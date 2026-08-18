@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 _EPHEMERAL = re.compile(
     r"^\s*("
     r"hi|hey|hello|heyo|yo|sup|hiya|hi bud|hey pal|bruh|"

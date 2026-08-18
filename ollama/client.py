@@ -17,6 +17,60 @@ TokenCallback = Callable[[str], None]
 ThinkingCallback = Callable[[str], None]
 
 
+def normalize_messages_for_ollama(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fix tool-call shapes Ollama rejects (string arguments, missing ids/names)."""
+    out: list[dict[str, Any]] = []
+    pending_tool_names: list[str] = []
+
+    for message in messages:
+        msg = dict(message)
+        role = msg.get("role")
+
+        if role == "assistant":
+            pending_tool_names = []
+            tool_calls = msg.get("tool_calls")
+            if isinstance(tool_calls, list):
+                fixed: list[dict[str, Any]] = []
+                for idx, call in enumerate(tool_calls):
+                    if not isinstance(call, dict):
+                        continue
+                    row = dict(call)
+                    if not row.get("id"):
+                        row["id"] = f"call_{idx}"
+                    fn = row.get("function")
+                    if isinstance(fn, dict):
+                        fn = dict(fn)
+                        raw_args = fn.get("arguments")
+                        if isinstance(raw_args, str):
+                            text = raw_args.strip()
+                            if text:
+                                try:
+                                    fn["arguments"] = json.loads(text)
+                                except json.JSONDecodeError:
+                                    fn["arguments"] = {}
+                            else:
+                                fn["arguments"] = {}
+                        elif raw_args is None:
+                            fn["arguments"] = {}
+                        row["function"] = fn
+                        pending_tool_names.append(str(fn.get("name") or ""))
+                    fixed.append(row)
+                msg["tool_calls"] = fixed
+            out.append(msg)
+            continue
+
+        if role == "tool":
+            if not msg.get("tool_name") and pending_tool_names:
+                msg["tool_name"] = pending_tool_names.pop(0)
+            out.append(msg)
+            continue
+
+        pending_tool_names = []
+        out.append(msg)
+
+    return out
+
+
 class OllamaError(RuntimeError):
     """Raised when the Ollama server returns an error or is unreachable."""
 
@@ -130,7 +184,7 @@ class OllamaClient:
         wait = float(self.config.timeout_s if timeout_s is None else timeout_s)
         payload: dict[str, Any] = {
             "model": model or self.config.model,
-            "messages": messages,
+            "messages": normalize_messages_for_ollama(messages),
             "stream": stream,
             # Qwen3: false → /no_think, true → /think
             "think": use_think,

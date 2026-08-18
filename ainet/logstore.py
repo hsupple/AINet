@@ -131,46 +131,11 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-_HAYDEN_TOP_KEYS = frozenset({"version", "name", "summary"}) | frozenset(HAYDEN_ARRAYS)
-
-
 def empty_hayden() -> dict[str, Any]:
     doc: dict[str, Any] = {"version": 1}
     for key in HAYDEN_ARRAYS:
         doc[key] = {}
     return doc
-
-
-def _sanitize_hayden_doc(doc: dict[str, Any]) -> bool:
-    """Drop stray top-level keys; fold misfiled trait maps into characteristics."""
-    changed = False
-    characteristics = _coerce_map(doc.get("characteristics"))
-    allowed = {k.casefold() for k in _HAYDEN_TOP_KEYS}
-
-    for key in list(doc.keys()):
-        if str(key).casefold() in allowed:
-            continue
-        stray = doc.pop(key)
-        changed = True
-        if not isinstance(stray, dict):
-            continue
-        for subkey, entries in _coerce_map(stray).items():
-            if not isinstance(entries, list):
-                continue
-            bucket = characteristics.get(subkey)
-            if isinstance(bucket, list):
-                bucket.extend(entries)
-                characteristics[subkey] = bucket[-MAX_ENTRIES:]
-            else:
-                characteristics[subkey] = entries[-MAX_ENTRIES:]
-
-    doc["characteristics"] = characteristics
-    for section in HAYDEN_ARRAYS:
-        coerced = _coerce_map(doc.get(section))
-        if section not in doc or doc.get(section) is not coerced:
-            doc[section] = coerced
-            changed = True
-    return changed
 
 
 def empty_log() -> dict[str, Any]:
@@ -655,8 +620,6 @@ def _load_doc(db: Any, path: str) -> dict[str, Any]:
         return doc
     data = db.read_json(path)["data"]
     if isinstance(data, dict):
-        if PurePosixPath(path).name.casefold() == HAYDEN_FILE and _sanitize_hayden_doc(data):
-            db.write_json(path, data, summary="sanitize hayden.json")
         return data
     return empty_doc_for(path)
 
@@ -787,7 +750,9 @@ def log_item(
         }
 
     path, map_key = resolved
-    if dest_raw.lower() not in _DISCARD and not normalize_label(label):
+    label_clean = normalize_label(label)
+
+    if dest_raw.lower() not in _DISCARD and not label_clean:
         return {
             "ok": False,
             "error": "label is required — person name, trait, or topic key",
@@ -819,8 +784,6 @@ def log_item(
     )
     if map_key:
         doc[map_key] = mapping
-    if PurePosixPath(path).name.casefold() == HAYDEN_FILE:
-        _sanitize_hayden_doc(doc)
     written = db.write_json(
         path,
         doc,
@@ -1008,17 +971,46 @@ def query_db(
             matches.append(row)
 
     matches.sort(key=lambda r: float(r.get("strength") or 0), reverse=True)
-    return {
+    capped = matches[:cap]
+    digest = _observation_digest(capped)
+    out: dict[str, Any] = {
         "ok": True,
         "count": min(len(matches), cap),
         "total": len(matches),
-        "matches": matches[:cap],
+        "matches": capped,
         "hint": (
             "Each match is a named key with decayed strength. "
             "Stale observations below the floor are omitted. "
-            "Narrow with name, q, after, before, or since_days."
+            "Narrow with name, q, after, before, or since_days. "
+            "match.file is a db-relative path (e.g. hayden.json), not a URL — never web_fetch it."
         ),
     }
+    if digest:
+        out["digest"] = digest
+        out["hint"] = (
+            f"{out['hint']} Answer Hayden NOW in plain speech from digest and entries[].text. "
+            "You are AI1, not Hayden — speak about him in second person (you/your)."
+        )
+    return out
+
+
+def _observation_digest(matches: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for row in matches:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("name") or "").strip()
+        entries = row.get("entries")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            text = str(entry.get("text") or "").strip()
+            if not text:
+                continue
+            lines.append(f"{key}: {text}" if key else text)
+    return "\n".join(lines)
 
 
 def root_listing_hint() -> str:

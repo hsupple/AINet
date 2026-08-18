@@ -112,10 +112,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "description": (
                 "Look up stored personal facts. Knowledge files are maps of named keys to "
                 "observation lists (a person name maps to [{\"time\", \"text\"}, ...]). "
-                "Filter by dest/file, person or topic name, words (q), and dates. "
-                "Omit dest to search all files except secrets. Host returns count/strength. "
-                "Use keys_only=true to list names without entries. "
-                "Only set include_secrets or dest=secrets when Hayden asks about private facts."
+                "Routing: dest=hayden when Hayden asks about himself (who am I, my characteristics, "
+                "my personality, traits). dest=people only for other people in his life. "
+                "Filter by dest/file, name, q, and dates. "
+                "Omit dest to search all files except secrets. "
+                "Answer from entries[].text in plain speech — do not read back count/strength unless asked."
             ),
             "parameters": {
                 "type": "object",
@@ -123,8 +124,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "dest": {
                         "type": "string",
                         "description": (
-                            "hayden, people, questions, household, memories, secrets, "
-                            "a hayden section (preferences, habits, ...), a project name, or a filename"
+                            "hayden (Hayden himself — characteristics, preferences, …), "
+                            "people (others in his life only), questions, household, memories, "
+                            "secrets, a hayden section (preferences, habits, …), a project name, or a filename"
                         ),
                     },
                     "file": {

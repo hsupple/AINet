@@ -18,7 +18,14 @@ from ainet.tools.project import (
 )
 from ainet.tools.registry import PROJECT_SESSION_TOOLS, catalog_tools, dispatch, tools_subset
 from ollama.client import OllamaCancelled, OllamaClient, OllamaError, ThinkingCallback, TokenCallback
-from ollama.personal_query import build_query_db_args, looks_like_personal_db_query
+from ollama.db_query_hints import (
+    hayden_asking_about_self,
+    is_hayden_db_dest,
+    looks_like_bad_self_reply,
+    query_result_includes_hayden,
+    self_identity_context,
+    wrong_dest_for_self_query,
+)
 from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
 from ollama.config import OllamaConfig
 from ollama.convo_memory import (
@@ -187,8 +194,20 @@ class ChatSession:
             ]
         if not self.mode.allow_mutations:
             if self.full_tools_unlocked:
-                return tools_subset(READ_TOOLS + ("get_tools",))
-            return tools_subset(self.mode.tool_names or READ_TOOLS + ("get_tools",))
+                names = READ_TOOLS + ("get_tools",)
+            else:
+                names = self.mode.tool_names or READ_TOOLS + ("get_tools",)
+            tools = tools_subset(names)
+            if self.mode.role == "oac" and self._self_identity_turn(
+                getattr(self, "_turn_user_text", "") or ""
+            ):
+                blocked = {"web_search", "web_fetch"}
+                tools = [
+                    t
+                    for t in tools
+                    if (t.get("function") or {}).get("name") not in blocked
+                ]
+            return tools
         if self.full_tools_unlocked or self.mode.tool_names is None:
             return tools_subset(None)
         return tools_subset(self.mode.tool_names)
@@ -415,6 +434,9 @@ class ChatSession:
         self.last_tool_names: list[str] = []
         self.last_mutating_calls: list[dict[str, Any]] = []
         self.last_tool_rounds = 0
+        self._turn_hayden_db_ok = False
+        self._force_prose_after_hayden_db = False
+        self._hayden_db_digest = ""
 
         if self.mode.role == "oac":
             opened = self._maybe_host_open_links(
@@ -422,8 +444,6 @@ class ChatSession:
             )
             if opened is not None:
                 return opened
-            if not self.project_root and looks_like_personal_db_query(user_text):
-                self._host_prefetch_query_db(user_text, on_tool=on_tool)
 
         tools = self._active_tools()
         if on_context is not None:
@@ -476,10 +496,13 @@ class ChatSession:
                 if self.cancelled():
                     raise OllamaCancelled("Cancelled")
                 self._trim_history()
+                round_tools = tools
+                if getattr(self, "_force_prose_after_hayden_db", False):
+                    round_tools = None
                 if stream or on_token or on_thinking:
                     response = self.client.chat_stream(
                         self.messages,
-                        tools=tools,
+                        tools=round_tools,
                         think=think,
                         on_token=_token if on_token else None,
                         on_thinking=on_thinking,
@@ -490,7 +513,7 @@ class ChatSession:
                 else:
                     response = self.client.chat(
                         self.messages,
-                        tools=tools,
+                        tools=round_tools,
                         think=think,
                         timeout_s=req_timeout,
                         options=extra_opts,
@@ -556,14 +579,9 @@ class ChatSession:
                         name, args = normalize_soi_tool(name, args)
                         call = {"function": {"name": name, "arguments": args}}
                     elif name == "web_search" and self.mode.role == "oac":
-                        if looks_like_personal_db_query(user_text):
-                            name = "query_db"
-                            args = build_query_db_args(user_text)
+                        args, enriched = self._maybe_enrich_web_search(args, user_text)
+                        if enriched:
                             call = {"function": {"name": name, "arguments": args}}
-                        else:
-                            args, enriched = self._maybe_enrich_web_search(args, user_text)
-                            if enriched:
-                                call = {"function": {"name": name, "arguments": args}}
                     if not name:
                         continue
                     tool_key = self._tool_call_key(name, args)
@@ -598,13 +616,28 @@ class ChatSession:
                     result = self._run_tool_call(call)
                     self.last_tool_names.append(name)
                     if (
+                        name == "query_db"
+                        and isinstance(result, dict)
+                        and result.get("ok")
+                    ):
+                        dest = str(args.get("dest") or args.get("file") or "")
+                        if is_hayden_db_dest(dest) or query_result_includes_hayden(result):
+                            self._turn_hayden_db_ok = True
+                            digest = str(result.get("digest") or "").strip()
+                            if digest:
+                                self._hayden_db_digest = digest
+                            if self._self_identity_turn(user_text):
+                                self._force_prose_after_hayden_db = True
+                    if (
                         name == "web_search"
                         and self.mode.role == "oac"
                         and self.mode.id != "deep_research"
                         and isinstance(result, dict)
                         and result.get("ok")
                         and not result.get("duplicate")
+                        and not result.get("blocked")
                         and not self._user_opts_out_of_open(user_text)
+                        and not self._self_identity_turn(user_text)
                     ):
                         result = self._auto_open_from_search(
                             result,
@@ -682,12 +715,16 @@ class ChatSession:
                                 }
                         on_tool("done", name, done_detail)
                     payload = self._truncate_tool_result(name, result)
-                    self.messages.append(
-                        {
-                            "role": "tool",
-                            "content": json.dumps(payload, ensure_ascii=False),
-                        }
-                    )
+                    tool_msg: dict[str, Any] = {
+                        "role": "tool",
+                        "content": json.dumps(payload, ensure_ascii=False),
+                    }
+                    if name:
+                        tool_msg["tool_name"] = name
+                    call_id = call.get("id") if isinstance(call, dict) else None
+                    if call_id:
+                        tool_msg["tool_call_id"] = call_id
+                    self.messages.append(tool_msg)
                     if hide_mem and isinstance(result, dict):
                         turn_links.extend(self._links_from_tool(name, result))
                 if parsed_from_text:
@@ -732,12 +769,11 @@ class ChatSession:
         if (
             hide_mem
             and self.mode.role == "oac"
-            and not (final_text or "").strip()
-            and looks_like_personal_db_query(user_text)
+            and self._turn_hayden_db_ok
+            and self._self_identity_turn(user_text)
+            and looks_like_bad_self_reply(final_text or "")
         ):
-            if "query_db" not in (self.last_tool_names or []):
-                self._host_prefetch_query_db(user_text, on_tool=on_tool)
-            retry = self._retry_answer_after_db(
+            retry = self._retry_answer_from_hayden_db(
                 user_text,
                 stream=stream,
                 on_token=on_token,
@@ -913,57 +949,7 @@ class ChatSession:
         visible, _mem = split_reply(content)
         return (visible or content).strip()
 
-    def _host_prefetch_query_db(
-        self,
-        user_text: str,
-        *,
-        on_tool: ToolCallback | None = None,
-    ) -> bool:
-        """Run query_db before the model turn so personal asks never hit the open web."""
-        args = build_query_db_args(user_text)
-        if on_tool:
-            on_tool("start", "query_db", {"arguments": args})
-        result = dispatch(self.db, "query_db", args)
-        if on_tool:
-            on_tool(
-                "done",
-                "query_db",
-                {
-                    "ok": bool(result.get("ok", True)) if isinstance(result, dict) else True,
-                    "summary": self._tool_result_summary("query_db", result)
-                    if isinstance(result, dict)
-                    else "ok",
-                },
-            )
-        payload = self._truncate_tool_result(
-            "query_db", result if isinstance(result, dict) else {"ok": False, "error": "bad result"}
-        )
-        self.messages.append(
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "query_db",
-                            "arguments": json.dumps(args, ensure_ascii=False),
-                        },
-                    }
-                ],
-            }
-        )
-        self.messages.append(
-            {"role": "tool", "content": json.dumps(payload, ensure_ascii=False)}
-        )
-        names = getattr(self, "last_tool_names", None)
-        if names is None:
-            self.last_tool_names = []
-            names = self.last_tool_names
-        names.append("query_db")
-        return True
-
-    def _retry_answer_after_db(
+    def _retry_answer_from_hayden_db(
         self,
         user_text: str,
         *,
@@ -974,18 +960,23 @@ class ChatSession:
         req_timeout: float,
         vis_filter: VisibleTokenFilter | None,
     ) -> str:
-        """One forced answer pass when the model skipped query_db on a personal ask."""
+        """Force a plain spoken answer from hayden.json digest — not meta, not role-play."""
+        digest = (getattr(self, "_hayden_db_digest", "") or "").strip()
+        if not digest:
+            digest = self._hayden_digest_from_messages()
         if self.messages and self.messages[-1].get("role") == "assistant":
-            tail = str(self.messages[-1].get("content") or "").strip()
-            if not tail and not self._has_tool_calls(self.messages[-1]):
-                self.messages.pop()
+            self.messages.pop()
+        body = digest or "(no stored observations)"
         self.messages.append(
             {
                 "role": "user",
                 "content": (
-                    "Host note: query_db already returned Hayden's stored facts for "
-                    f"{user_text!r}. Answer from those database matches now. "
-                    "Do not web_search. Do not ask clarifying questions."
+                    f"Hayden asked: {user_text!r}\n\n"
+                    "Stored facts about Hayden (from query_db):\n"
+                    f"{body}\n\n"
+                    "Answer NOW in plain speech, second person (you/your). "
+                    "You are AI1, not Hayden — never say I'm Hayden. "
+                    "Summarize what the stored text says. No meta talk, no offers to summarize, no web search."
                 ),
             }
         )
@@ -1021,6 +1012,22 @@ class ChatSession:
         content = str(message.get("content") or "")
         visible, _mem = split_reply(content)
         return (visible or content).strip()
+
+    def _hayden_digest_from_messages(self) -> str:
+        for message in reversed(self.messages):
+            if message.get("role") != "tool":
+                continue
+            raw = message.get("content")
+            try:
+                data = json.loads(raw) if isinstance(raw, str) else raw
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            digest = str(data.get("digest") or "").strip()
+            if digest:
+                return digest
+        return ""
 
     def _maybe_enrich_web_search(
         self, args: dict[str, Any], user_text: str
@@ -1639,6 +1646,15 @@ class ChatSession:
             limit = max(limit, 9000)
         if name == "web_fetch" and self.mode.role == "oac":
             limit = max(limit, 5000)
+        if name == "query_db" and isinstance(result, dict) and self.mode.role == "oac":
+            slim = dict(result)
+            note = (
+                "Answer Hayden in plain words from matches[].entries[].text. "
+                "Do not recite count, strength, or resistance_days unless he asked for stats."
+            )
+            existing = str(slim.get("hint") or "").strip()
+            slim["hint"] = f"{existing} {note}".strip() if existing else note
+            return slim
         if len(raw) <= limit:
             return result
         if name == "web_search" and isinstance(result, dict):
@@ -1763,6 +1779,34 @@ class ChatSession:
             if guard is not None:
                 return guard
 
+        if name == "web_fetch":
+            guard = self._reject_db_path_as_web_url(args)
+            if guard is not None:
+                return guard
+
+        if name in {"web_search", "web_fetch"} and self.mode.role == "oac":
+            guard = self._reject_open_web_for_self(
+                str(getattr(self, "_turn_user_text", "") or "")
+            )
+            if guard is not None:
+                return guard
+
+        if name == "query_db" and self.mode.role == "oac":
+            dest = str(args.get("dest") or args.get("file") or "")
+            ask = str(getattr(self, "_turn_user_text", "") or "")
+            if hayden_asking_about_self(ask) and wrong_dest_for_self_query(dest):
+                return {
+                    "ok": False,
+                    "error": (
+                        "Hayden asked about himself, not someone else. "
+                        "people.json is for other people only."
+                    ),
+                    "hint": (
+                        "Call query_db again with dest=hayden (or name= for one trait like "
+                        "curiosity or personality). Then answer from entries[].text in plain speech."
+                    ),
+                }
+
         if self.soi_folder_scope and name in {"patch_json", "refresh_read"}:
             guard = self._reject_soi_folder_scope(name, args)
             if guard is not None:
@@ -1787,6 +1831,54 @@ class ChatSession:
         if self.mode.role == "soi":
             result = _redact_assistant_fields(result)
         return result
+
+    def _self_identity_turn(self, user_text: str) -> bool:
+        if getattr(self, "_turn_hayden_db_ok", False):
+            return True
+        return self_identity_context(user_text, standing_request(self.convo_memory))
+
+    def _reject_open_web_for_self(self, user_text: str) -> dict[str, Any] | None:
+        if not self._self_identity_turn(user_text):
+            return None
+        return {
+            "ok": False,
+            "blocked": True,
+            "error": (
+                "web_search and web_fetch are blocked while answering questions about Hayden himself."
+            ),
+            "hint": (
+                "Use query_db dest=hayden and answer from matches[].entries[].text already in this turn. "
+                "Do not search the open web for who Hayden is — that pulls unrelated companies and bios."
+            ),
+        }
+
+    @staticmethod
+    def _reject_db_path_as_web_url(args: dict[str, Any]) -> dict[str, Any] | None:
+        """Block web_fetch on db filenames mistaken for URLs (e.g. https://hayden.json)."""
+        url = str(args.get("url") or "").strip()
+        if not url:
+            return None
+        if not url.lower().startswith(("http://", "https://")):
+            if url.replace("\\", "/").endswith(".json"):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"{url!r} is a local database path, not a web URL. "
+                        "Use query_db or read_json on that file and answer from the matches."
+                    ),
+                }
+            return None
+        parsed = urllib.parse.urlparse(url)
+        host = (parsed.netloc or "").casefold()
+        if host.endswith(".json") and host.count(".") == 1:
+            return {
+                "ok": False,
+                "error": (
+                    f"{url!r} is not a real website; it looks like a database filename. "
+                    "query_db already returns observation text in matches[].entries; answer from that."
+                ),
+            }
+        return None
 
     @staticmethod
     def _reject_non_web_chrome(args: dict[str, Any]) -> dict[str, Any] | None:

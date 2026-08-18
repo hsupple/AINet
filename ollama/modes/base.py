@@ -6,11 +6,11 @@ from dataclasses import dataclass
 
 
 READ_TOOLS = (
+    "query_db",
     "list_dir",
     "tree",
     "read_text",
     "read_json",
-    "query_db",
     "web_search",
     "web_fetch",
     "image_search",
