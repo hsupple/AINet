@@ -21,7 +21,7 @@ from ollama.prompts.soi_test import FILING_INSTRUCTIONS
 from ollama.session import ChatSession
 from ollama.soi_log import SOILogger
 
-_FILING_BATCH_SIZE = 4
+_FILING_BATCH_SIZE = 2
 _FILING_STREAM_RETRIES = 2
 _SOI_MIN_TOOL_ROUNDS = 6
 _SOI_MAX_HISTORY = 16
@@ -173,15 +173,22 @@ class SOIWorker:
         }
         errors: list[str] = []
         seen_ids: set[str] = set()
+        skip_ids: set[str] = set()
         cancelled = False
+        max_batches = 12
         while True:
             if self.cancelled():
                 cancelled = True
                 break
-            batch_changelog = self.pending_changelog()[:_FILING_BATCH_SIZE]
+            pending = [
+                e
+                for e in self.pending_changelog()
+                if str(e.get("id") or "") not in skip_ids
+            ]
+            batch_changelog = pending[:_FILING_BATCH_SIZE]
             if not batch_changelog:
                 break
-            if totals["batches"] >= 6:
+            if totals["batches"] >= max_batches:
                 break
             batch_ids = [str(e.get("id") or "") for e in batch_changelog if e.get("id")]
             if batch_ids and all(eid in seen_ids for eid in batch_ids):
@@ -202,15 +209,14 @@ class SOIWorker:
             totals["retries"] += int(result.get("retries") or 0)
             if result.get("reply"):
                 totals["replies"].append(str(result["reply"])[:400])
-            if (
+            no_progress = (
                 int(result.get("marked_filed") or 0) == 0
                 and int(result.get("marked_discarded") or 0) == 0
-                and int(result.get("mutating_tool_calls") or 0) == 0
-            ):
-                break
-            if int(result.get("left_pending") or 0) >= len(batch_changelog) and len(batch_changelog) > 0:
-                if int(result.get("marked_discarded") or 0) == 0 and int(result.get("marked_filed") or 0) == 0:
-                    break
+            )
+            if no_progress:
+                # Skip this stuck batch for the rest of this wake; keep later entries moving.
+                skip_ids.update(batch_ids)
+                continue
 
         ok = not errors
         self._merge_state(
@@ -278,10 +284,12 @@ class SOIWorker:
                 "mutating_calls": stats.get("mutating_calls") or [],
             }
         while (
-            err
+            (
+                (err and _retryable_model_error(err))
+                or (not err and not (stats.get("mutating_calls") or []))
+            )
             and not (stats.get("mutating_calls") or [])
             and retries < _FILING_STREAM_RETRIES
-            and _retryable_model_error(err)
             and not self.cancelled()
         ):
             retries += 1
@@ -290,7 +298,13 @@ class SOIWorker:
                 phase="filing",
                 attempt=retries,
                 max_attempts=_FILING_STREAM_RETRIES,
-                error=err,
+                error=err or "no log_item calls",
+            )
+            # Nudge: every id must be filed or discarded via log_item.
+            payload = dict(payload)
+            payload["retry_hint"] = (
+                "Previous reply made no log_item calls. "
+                "Call log_item for every changelog id now (dest=discard when nothing lasting)."
             )
             reply, err, stats = self._ask_soi(payload)
             if err == "cancelled" or stats.get("cancelled"):
@@ -316,11 +330,7 @@ class SOIWorker:
         handled_by_id: set[str] = set()
         dest_by_id: dict[str, Any] = {}
         by_entry = {str(e.get("id") or ""): e for e in batch_changelog}
-        discarded_ids = {
-            eid
-            for eid in discarded_ids
-            if (by_entry.get(eid) and _is_ephemeral_entry(by_entry[eid]))
-        }
+        discarded_ids = {eid for eid in discarded_ids if eid in known}
         for call in stats.get("mutating_calls") or []:
             if call.get("tool") not in {"log_item", "file_note"}:
                 continue

@@ -74,4 +74,15 @@ def format_test_user_message(prompt: str, payload: dict[str, Any]) -> str:
     lines.append("changelog_entries (grouped by session, chronological within each):")
     entries = payload.get("changelog_entries") or []
     lines.append(json.dumps(_group_changelog(entries), ensure_ascii=False, indent=2))
+    hint = str(payload.get("retry_hint") or "").strip()
+    if hint:
+        lines.append("")
+        lines.append(hint)
+    lines.append("")
+    lines.append(
+        "Reminder: reuse existing keys when the subject matches; create a new key only when needed. "
+        "Each log_item must only use facts from its cited entry_id(s). "
+        "Discard turns with no lasting fact. "
+        "Call log_item for every id in this batch."
+    )
     return "\n".join(lines)

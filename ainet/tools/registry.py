@@ -404,11 +404,17 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "log_item",
             "description": (
-                "SOI filing. Create a named key if missing, then append one observation. "
-                "label is the key: a person name (Jake), trait (studious), or topic. "
-                "Host writes \"Jake\": [] then appends {time, text: reason}. "
-                "Reuse an existing key from the labels list (case-insensitive). "
-                "dest=discard for greetings. Split a turn: same entry_id, different dest/label."
+                "SOI filing: append one lasting observation under a stable key. "
+                "Reuse an existing key from the labels list whenever the subject matches "
+                "(case-insensitive). Create a new key only when no existing key fits. "
+                "Prefer coarse durable keys over narrow one-off phrases. "
+                "dest chooses the file/section; label is the key; reason is the fact text. "
+                "For people, label is the person's name. For hayden, use a broad trait bucket "
+                "(e.g. personality, interests, education). "
+                "reason states what is true — not that someone asked or confirmed something. "
+                "dest=discard when the turn has no lasting fact. "
+                "Split kinds of fact with multiple calls: same entry_id, different dest/label/reason. "
+                "Only file content that belongs to the cited entry_id(s)."
             ),
             "parameters": {
                 "type": "object",
@@ -429,11 +435,16 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     },
                     "label": {
                         "type": "string",
-                        "description": "Key to create or append: person name, trait, or topic",
+                        "description": (
+                            "Stable subject key to create or append. Reuse existing keys when possible. "
+                            "Person name for people; broad trait/topic for other dests — not a full sentence."
+                        ),
                     },
                     "reason": {
                         "type": "string",
-                        "description": "One sentence appended onto that key's list",
+                        "description": (
+                            "One third-person sentence stating the lasting fact to store under that key"
+                        ),
                     },
                     "summary": {"type": "string"},
                 },
