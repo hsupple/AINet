@@ -23,7 +23,7 @@ from ollama.config import OllamaConfig
 from ollama.esp32_hub import Esp32Hub
 from ollama.idle import IdleSOIWatcher
 from ollama.inference_gate import INFERENCE_GATE
-from ollama.modes import DEFAULT_MODE_ID, get_mode, list_modes
+from ollama.modes import DEFAULT_MODE_ID, get_mode, list_ui_modes
 from ollama.session import ChatSession
 
 _STATIC = Path(__file__).resolve().parent / "static"
@@ -134,8 +134,7 @@ class ChatApp:
                 "soi_running": self.watcher.running,
                 "modes": [
                     {"id": m.id, "name": m.name, "description": m.description}
-                    for m in list_modes()
-                    if m.role == "oac"
+                    for m in list_ui_modes(project_focused=bool(self.session.project_root))
                 ],
                 "soi_log": list(self.soi_log),
                 "soi_log_seq": self._soi_seq,
@@ -208,6 +207,10 @@ class ChatApp:
                 return
             events.put({"type": "token", "text": delta})
 
+        def _on_control(kind: str) -> None:
+            if kind == "replace_reply":
+                events.put({"type": "replace"})
+
         def _on_tool(phase: str, name: str, detail: dict[str, Any]) -> None:
             detail = detail or {}
             if phase == "start":
@@ -216,8 +219,12 @@ class ChatApp:
                 slim: dict[str, Any] = {}
                 if isinstance(args, dict):
                     for key in (
+                        "about",
                         "title",
                         "query",
+                        "q",
+                        "start",
+                        "end",
                         "url",
                         "urls",
                         "path",
@@ -304,6 +311,7 @@ class ChatApp:
                     on_token=_on_token,
                     on_tool=_on_tool,
                     on_context=_on_context,
+                    on_control=_on_control,
                     on_wait=lambda snap: events.put(
                         {"type": "status", "phase": "queued", **(snap or {})}
                     ),
@@ -314,6 +322,9 @@ class ChatApp:
                     user=text,
                     reply=reply,
                     model=self.config.model,
+                    host_retry=getattr(self.session, "last_host_retry", None),
+                    tools=list(getattr(self.session, "last_tool_names", None) or []),
+                    tool_rounds=int(getattr(self.session, "last_tool_rounds", 0) or 0),
                 )
                 with self.lock:
                     done_payload = {
@@ -381,7 +392,8 @@ class ChatApp:
             # second and must not disguise a model that is producing nothing.
             if time.monotonic() - last_progress >= stall_limit_s:
                 self.session.request_cancel()
-                self.watcher.cancel_job()
+                # Abort SOI mid-run only — do not permanently pause auto-filing.
+                self.watcher.cancel_job(pause=False)
                 INFERENCE_GATE.force_reset()
                 err = "Model stalled with no output. Press Reset AI if Stop does nothing."
                 self._last_error = err
@@ -533,6 +545,49 @@ class ChatApp:
             return {"ok": False, "error": "Brief not found"}
         return {"ok": True, "brief": brief}
 
+    def calendar_get(
+        self,
+        *,
+        year: int | None = None,
+        month: int | None = None,
+        start: str = "",
+        end: str = "",
+        q: str = "",
+        upcoming: int | None = None,
+    ) -> dict[str, Any]:
+        from datetime import date
+
+        from ainet.calendar_store import month_payload, query_events
+
+        root = self.config.db_root
+        if year and month:
+            return month_payload(root, int(year), int(month))
+        if start or end or q or upcoming:
+            return query_events(
+                root,
+                start=start,
+                end=end,
+                q=q,
+                upcoming=upcoming,
+            )
+        today = date.today()
+        return month_payload(root, today.year, today.month)
+
+    def calendar_add(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from ainet.calendar_store import add_event
+
+        return add_event(self.config.db_root, payload)
+
+    def calendar_update(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from ainet.calendar_store import update_event
+
+        return update_event(self.config.db_root, payload)
+
+    def calendar_cancel(self, event_id: str, *, delete: bool = False) -> dict[str, Any]:
+        from ainet.calendar_store import cancel_event
+
+        return cancel_event(self.config.db_root, event_id, delete=delete)
+
     def open_chrome_url(self, url: str = "", urls: list[str] | None = None) -> dict[str, Any]:
         from ainet.tools.browser import open_chrome
 
@@ -637,6 +692,40 @@ def make_handler(app: ChatApp):
                     self._send(status, body, ctype)
                     return
                 status, body, ctype = _json_bytes(app.list_chats())
+                self._send(status, body, ctype)
+                return
+            if path == "/api/calendar":
+                year_raw = (qs.get("year") or [""])[0]
+                month_raw = (qs.get("month") or [""])[0]
+                upcoming_raw = (qs.get("upcoming") or [""])[0]
+                try:
+                    year = int(year_raw) if year_raw else None
+                except ValueError:
+                    year = None
+                try:
+                    month = int(month_raw) if month_raw else None
+                except ValueError:
+                    month = None
+                try:
+                    upcoming = int(upcoming_raw) if upcoming_raw else None
+                except ValueError:
+                    upcoming = None
+                try:
+                    payload = app.calendar_get(
+                        year=year,
+                        month=month,
+                        start=(qs.get("start") or [""])[0],
+                        end=(qs.get("end") or [""])[0],
+                        q=(qs.get("q") or [""])[0],
+                        upcoming=upcoming,
+                    )
+                except (ValueError, TypeError, OSError) as exc:
+                    status, body, ctype = _json_bytes(
+                        {"ok": False, "error": str(exc)}, 400
+                    )
+                    self._send(status, body, ctype)
+                    return
+                status, body, ctype = _json_bytes(payload)
                 self._send(status, body, ctype)
                 return
             if path == "/api/spotify/status":
@@ -857,6 +946,48 @@ def make_handler(app: ChatApp):
                 status, body, ctype = _json_bytes(
                     app.open_chrome_url(str(data.get("url") or ""), urls=urls)
                 )
+                self._send(status, body, ctype)
+                return
+            if path == "/api/calendar/events":
+                try:
+                    payload = app.calendar_add(data)
+                except (ValueError, TypeError, OSError) as exc:
+                    status, body, ctype = _json_bytes(
+                        {"ok": False, "error": str(exc)}, 400
+                    )
+                    self._send(status, body, ctype)
+                    return
+                code = 200 if payload.get("ok") else 400
+                status, body, ctype = _json_bytes(payload, code)
+                self._send(status, body, ctype)
+                return
+            if path == "/api/calendar/update":
+                try:
+                    payload = app.calendar_update(data)
+                except (ValueError, TypeError, OSError) as exc:
+                    status, body, ctype = _json_bytes(
+                        {"ok": False, "error": str(exc)}, 400
+                    )
+                    self._send(status, body, ctype)
+                    return
+                code = 200 if payload.get("ok") else 400
+                status, body, ctype = _json_bytes(payload, code)
+                self._send(status, body, ctype)
+                return
+            if path == "/api/calendar/cancel":
+                try:
+                    payload = app.calendar_cancel(
+                        str(data.get("id") or ""),
+                        delete=bool(data.get("delete")),
+                    )
+                except (ValueError, TypeError, OSError) as exc:
+                    status, body, ctype = _json_bytes(
+                        {"ok": False, "error": str(exc)}, 400
+                    )
+                    self._send(status, body, ctype)
+                    return
+                code = 200 if payload.get("ok") else 400
+                status, body, ctype = _json_bytes(payload, code)
                 self._send(status, body, ctype)
                 return
             if path == "/api/spotify/credentials":

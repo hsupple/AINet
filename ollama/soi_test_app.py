@@ -122,7 +122,7 @@ class TestSOIWorker(SOIWorker):
             if phase_str == "start":
                 args_obj = detail.get("arguments") or {}
                 hint = ""
-                for key in ("query", "path", "url", "q", "dest", "entry_id"):
+                for key in ("about", "query", "path", "url", "q", "dest", "entry_id"):
                     if key in args_obj and args_obj[key]:
                         hint = f" {key}={args_obj[key]!r}"
                         break

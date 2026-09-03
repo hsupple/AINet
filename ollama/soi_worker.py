@@ -438,7 +438,7 @@ class SOIWorker:
             if phase == "start":
                 args_obj = detail.get("arguments") or {}
                 hint = ""
-                for key in ("dest", "label", "entry_id", "query", "path"):
+                for key in ("about", "dest", "label", "entry_id", "query", "path"):
                     if key in args_obj and args_obj[key]:
                         hint = f" {key}={args_obj[key]!r}"
                         break

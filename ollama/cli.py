@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     show.add_argument("mode", help="Mode id")
 
     chat = sub.add_parser("chat", help="OAC interactive or one-shot chat (SOI runs after idle)")
-    chat.add_argument("--mode", default=DEFAULT_MODE_ID, help="OAC flavor mode id")
+    chat.add_argument("--mode", default=DEFAULT_MODE_ID, help="OAC mode id (companion=OAC)")
     chat.add_argument("--auto-mode", dest="auto_mode", action="store_true", default=None)
     chat.add_argument("--no-auto-mode", dest="auto_mode", action="store_false")
     chat.add_argument("--no-soi", action="store_true", help="Disable idle SOI watcher")
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     chat.add_argument("message", nargs="?", default=None, help="Optional one-shot message")
 
-    route = sub.add_parser("route", help="Preview OAC flavor auto-route")
+    route = sub.add_parser("route", help="Preview OAC capability auto-route")
     route.add_argument("--current", default=DEFAULT_MODE_ID)
     route.add_argument("message")
 
@@ -258,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         if mode.role != "oac":
-            print("chat is for OAC flavors (companion/conversation/planner). Use soi-run for SOI.")
+            print("chat is for OAC (live talk). Use soi-run for SOI.")
             return 2
         session = ChatSession(
             mode=mode,
@@ -309,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
                 if line == "/auto":
                     session.auto_mode = True
                     session.mode_locked = False
-                    print("(auto flavor on)")
+                    print("(auto capability routing on)")
                     continue
                 if line == "/soi":
                     result = SOIWorker(config).run_once()
@@ -324,10 +324,10 @@ def main(argv: list[str] | None = None) -> int:
                         print(str(exc))
                         continue
                     if session.mode.role != "oac":
-                        print("Stay on OAC flavors in chat; use /soi or soi-run for SOI.")
+                        print("Stay on OAC in chat; use /soi or soi-run for SOI.")
                         session.set_mode(DEFAULT_MODE_ID, lock=False)
                         continue
-                    print(f"(locked OAC mode={session.mode.id}; /auto to unlock)")
+                    print(f"(locked mode={session.mode.id}; /auto to unlock)")
                     continue
                 try:
                     _chat_turn(session, line)

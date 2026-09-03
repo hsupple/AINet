@@ -123,7 +123,7 @@ _FILE_HINT = (
     "questions.json — topics. household.json — home. "
     "memories.json — life events. secrets.json — private. "
     "Projects/<Name>/project.json — named projects. "
-    "Near-term schedule belongs on Calendar.json later, not a planner file."
+    "Near-term schedule belongs on Calendar.json via query_calendar / add_calendar_event, not a planner file."
 )
 
 
@@ -854,18 +854,26 @@ def _name_matches(key: str, name: str) -> bool:
 
 
 def _words_match(name: str, entries: list[Any], q: str) -> list[Any]:
+    """Match entries against a multi-word query.
+
+    Tokens are OR'd (any hit keeps the entry). Entries with more token hits
+    sort first so a phrase like \"personality curiosity\" still finds the
+    personality observation that only says \"curious\".
+    """
     tokens = [t for t in (q or "").casefold().split() if t]
     if not tokens:
         return list(entries)
     name_l = name.casefold()
-    kept: list[Any] = []
+    scored: list[tuple[int, Any]] = []
     for entry in entries:
         blob = f"{name_l} {_entry_text(entry).casefold()}"
-        if all(token in blob for token in tokens):
-            kept.append(entry)
-    if all(token in name_l for token in tokens):
-        return list(entries) if not kept else kept
-    return kept
+        hits = sum(1 for token in tokens if token in blob)
+        if hits:
+            scored.append((hits, entry))
+    if not scored and any(token in name_l for token in tokens):
+        return list(entries)
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [entry for _hits, entry in scored]
 
 
 def _date_in_range(when: str, after: datetime | None, before: datetime | None) -> bool:
@@ -945,7 +953,8 @@ def query_db(
             if q:
                 word_hits = _words_match(str(key), entries, q)
                 tokens = [t for t in q.casefold().split() if t]
-                name_hit = bool(tokens) and all(tok in str(key).casefold() for tok in tokens)
+                key_l = str(key).casefold()
+                name_hit = bool(tokens) and any(tok in key_l for tok in tokens)
                 if word_hits:
                     entries = word_hits
                 elif name_hit:
@@ -994,8 +1003,11 @@ def query_db(
     return out
 
 
-def _observation_digest(matches: list[dict[str, Any]]) -> str:
+def _observation_digest(
+    matches: list[dict[str, Any]], *, max_lines: int = 20, max_chars: int = 2200
+) -> str:
     lines: list[str] = []
+    total = 0
     for row in matches:
         if not isinstance(row, dict):
             continue
@@ -1009,7 +1021,13 @@ def _observation_digest(matches: list[dict[str, Any]]) -> str:
             text = str(entry.get("text") or "").strip()
             if not text:
                 continue
-            lines.append(f"{key}: {text}" if key else text)
+            line = f"{key}: {text}" if key else text
+            if total + len(line) + 1 > max_chars:
+                return "\n".join(lines)
+            lines.append(line)
+            total += len(line) + 1
+            if len(lines) >= max_lines:
+                return "\n".join(lines)
     return "\n".join(lines)
 
 

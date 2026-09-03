@@ -1,6 +1,6 @@
 """OAC project-focus mode — mutations allowed only inside the focused project."""
 
-from ollama.modes.base import META_TOOLS, READ_TOOLS, WRITE_LIGHT, Mode
+from ollama.modes.base import CALENDAR_WRITE, META_TOOLS, READ_TOOLS, WRITE_LIGHT, Mode
 from ollama.prompts import project as project_prompt
 
 _PROJECT_TOOLS = (
@@ -19,7 +19,7 @@ MODE = Mode(
     description="Focused on one Projects/<Name>/ folder (create folders, text, rename, read).",
     prompt=project_prompt.PROMPT,
     tools_enabled=True,
-    tool_names=READ_TOOLS + WRITE_LIGHT + _PROJECT_TOOLS + META_TOOLS,
+    tool_names=READ_TOOLS + WRITE_LIGHT + CALENDAR_WRITE + _PROJECT_TOOLS + META_TOOLS,
     role="oac",
     allow_mutations=True,
 )

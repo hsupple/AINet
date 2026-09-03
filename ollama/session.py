@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import urllib.parse
@@ -16,14 +17,31 @@ from ainet.tools.project import (
     resolve_under_project,
     user_project_name_from_path,
 )
-from ainet.tools.registry import PROJECT_SESSION_TOOLS, catalog_tools, dispatch, tools_subset
+from ainet.tools.registry import (
+    CALENDAR_SESSION_TOOLS,
+    PROJECT_SESSION_TOOLS,
+    catalog_tools,
+    dispatch,
+    tools_subset,
+)
 from ollama.client import OllamaCancelled, OllamaClient, OllamaError, ThinkingCallback, TokenCallback
 from ollama.db_query_hints import (
+    compact_digest,
+    extract_query_tokens,
     hayden_asking_about_self,
     is_hayden_db_dest,
     looks_like_bad_self_reply,
+    looks_like_empty_therapy,
+    looks_like_fresh_start,
+    looks_like_generic_ignore,
+    looks_like_profile_dump,
+    personal_memory_question,
     query_result_includes_hayden,
     self_identity_context,
+    should_prefetch,
+    should_prefetch_calendar,
+    strip_profile_dump,
+    wants_open_web,
     wrong_dest_for_self_query,
 )
 from ollama.content_tools import normalize_soi_tool, parse_content_tool_calls
@@ -33,11 +51,28 @@ from ollama.convo_memory import (
     enrich_web_search_query,
     extract_http_urls,
     host_fallback_memory,
-    last_turn_block,
+    is_action_confirm,
+    is_short_ack,
+    is_vague_pronoun_followup,
+    is_vague_search_followup,
+    known_context_block,
+    last_user_wanted_videos,
     memory_system_suffix,
+    named_search_topic,
+    offered_to_calendar,
+    offered_to_search,
+    recent_turns_block,
+    reply_looks_like_clarifier,
     split_reply,
     standing_request,
+    strip_leading_clarifier,
+    followup_topic,
+    topic_for_search,
+    wants_videos,
 )
+
+# Completed prose turns kept for OAC follow-ups (plus the in-flight current turn).
+_OAC_PRIOR_TURNS = 5
 from ollama.conversation_store import ConversationStore
 from ollama.prompts.shared import CURRENT_DATE_TOKEN, today_context
 from ollama.inference_gate import INFERENCE_GATE
@@ -49,6 +84,99 @@ from ollama.router import suggest_mode
 ToolCallback = Callable[[str, str, dict[str, Any]], None]
 WaitCallback = Callable[[dict[str, Any]], None]
 ContextCallback = Callable[[dict[str, Any]], None]
+ControlCallback = Callable[[str], None]
+
+_YEAR_TOKEN = re.compile(r"\b(?:19|20)\d{2}\b")
+
+
+def _clip_about(text: str, limit: int = 72) -> str:
+    s = re.sub(r"\s+", " ", str(text or "")).strip().strip("\"'")
+    if len(s) <= limit:
+        return s
+    cut = s[: limit - 1].rsplit(" ", 1)[0] or s[: limit - 1]
+    return cut.rstrip(" ·,-") + "…"
+
+
+def _digest_lookup(text: str, *, tail: bool = False) -> str:
+    s = _YEAR_TOKEN.sub(" ", str(text or ""))
+    s = re.sub(r"\s+", " ", s).strip().strip("\"'")
+    words = [w for w in s.split() if w]
+    if len(words) > 8:
+        words = words[-5:] if tail else words[:8]
+    return _clip_about(" ".join(words))
+
+
+def _host_about(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    try:
+        host = (urllib.parse.urlparse(raw).netloc or "").removeprefix("www.")
+    except Exception:
+        host = ""
+    return _clip_about(host or raw)
+
+
+def default_tool_about(name: str, args: dict[str, Any] | None) -> str:
+    """Short card phrase: model `about` if present, else a cleaned lookup string."""
+    args = args or {}
+    existing = _clip_about(str(args.get("about") or ""))
+    if existing:
+        return existing
+    if name in {"web_search", "image_search"}:
+        return _digest_lookup(str(args.get("query") or ""))
+    if name == "query_db":
+        dest = str(args.get("dest") or args.get("file") or "").casefold()
+        q = str(args.get("q") or args.get("name") or "").strip()
+        if dest.startswith("hayden") and not q:
+            return "what we have on you"
+        return _digest_lookup(q or dest, tail=True) or "stored notes"
+    if name == "web_fetch":
+        return _host_about(str(args.get("url") or "")) or "reading page"
+    if name == "open_chrome":
+        urls = args.get("urls")
+        url = str(args.get("url") or "")
+        if isinstance(urls, list) and urls:
+            first = _host_about(str(urls[0] or ""))
+            extra = len(urls) - 1
+            if extra > 0 and first:
+                return _clip_about(f"{first} +{extra}")
+            return first or f"{len(urls)} pages"
+        return _host_about(url) or "open tab"
+    if name == "spotify":
+        return _clip_about(str(args.get("query") or args.get("action") or ""))
+    if name == "create_plot":
+        return _clip_about(str(args.get("title") or args.get("equation") or ""))
+    if name == "query_calendar":
+        existing = _clip_about(str(args.get("about") or ""))
+        if existing and not re.match(r"^-?\d{2}-\d{2}$", existing) and not re.match(
+            r"^\d{4}-\d{2}-\d{2}", existing
+        ):
+            return existing
+        q = str(args.get("q") or "").strip()
+        if q:
+            return _digest_lookup(q) or "calendar"
+        start = str(args.get("start") or "")[:10]
+        end = str(args.get("end") or "")[:10]
+        try:
+            from datetime import date as _date
+
+            s = _date.fromisoformat(start) if len(start) == 10 else None
+            e = _date.fromisoformat(end) if len(end) == 10 else None
+        except ValueError:
+            s = e = None
+        if s and (not e or e == s):
+            return f"{s.strftime('%a %b')} {s.day}"
+        if s and e:
+            return f"{s.strftime('%b')} {s.day}–{e.day}"
+        return "calendar"
+    if name == "add_calendar_event":
+        return _clip_about(str(args.get("title") or "new event")) or "new event"
+    if name == "update_calendar_event":
+        return _clip_about(str(args.get("title") or args.get("id") or "update event"))
+    if name == "cancel_calendar_event":
+        return _clip_about(str(args.get("id") or "cancel event"))
+    return ""
 
 
 _MUTATING = {
@@ -102,9 +230,14 @@ class ChatSession:
         self.soi_folder_scope: str | None = None
         self._project_prev_mode: str = "companion"
         self.convo_memory: str = ""
+        self._injected_context: str = ""
+        self.last_host_retry: str | None = None
+        self._replace_stream = None
         self.last_user_text: str = ""
         self.last_assistant_text: str = ""
         self.last_links: list[tuple[str, str]] = []
+        # Last 2–3 completed (user, assistant) pairs for pronoun / follow-up context.
+        self.recent_turns: list[tuple[str, str]] = []
         self.messages: list[dict[str, Any]] = []
         self.last_activity = time.monotonic()
         self.persist_conversation = (
@@ -123,17 +256,50 @@ class ChatSession:
         self._rebuild_system()
         if resume_session and self.store and self.session_id:
             self.convo_memory = self.store.load_memory(self.session_id)
-            recent = self.store.recent_turns(self.session_id, limit=1)
-            if recent:
-                last = recent[-1]
-                self.last_user_text = str(last.get("user") or "")
-                self.last_assistant_text = str(last.get("assistant") or "")
-                self.last_links = [("", u) for u in extract_http_urls(self.last_assistant_text)]
+            self._load_recent_turns_from_store(limit=_OAC_PRIOR_TURNS + 1)
             self._rebuild_system()
         self.cancel_event = threading.Event()
 
+    def _load_recent_turns_from_store(self, *, limit: int = 3) -> None:
+        if not self.store or not self.session_id:
+            self.recent_turns = []
+            self.last_user_text = ""
+            self.last_assistant_text = ""
+            self.last_links = []
+            return
+        recent = self.store.recent_turns(self.session_id, limit=max(1, limit))
+        self.recent_turns = [
+            (str(t.get("user") or ""), str(t.get("assistant") or ""))
+            for t in recent
+            if isinstance(t, dict)
+        ]
+        if self.recent_turns:
+            self.last_user_text, self.last_assistant_text = self.recent_turns[-1]
+            self.last_links = [("", u) for u in extract_http_urls(self.last_assistant_text)]
+        else:
+            self.last_user_text = ""
+            self.last_assistant_text = ""
+            self.last_links = []
+
+    def _record_completed_turn(
+        self,
+        user_text: str,
+        assistant_text: str,
+        *,
+        links: list[tuple[str, str]] | None = None,
+    ) -> None:
+        self.last_user_text = user_text
+        self.last_assistant_text = assistant_text
+        if links is not None:
+            self.last_links = links
+        pair = (user_text, assistant_text)
+        if self.recent_turns and self.recent_turns[-1] == pair:
+            return
+        self.recent_turns.append(pair)
+        self.recent_turns = self.recent_turns[-(_OAC_PRIOR_TURNS + 1) :]
+
     def open_stored_session(self, session_id: str) -> dict[str, Any]:
-        """Switch to a logged chat. UI gets full turns; the model still gets last-turn memory."""
+        """Switch to a logged chat. UI gets full turns; the model still gets recent-turn memory."""
         if not self.store:
             return {"ok": False, "error": "Chat log is not enabled"}
         if not self.store.session_exists(session_id):
@@ -143,10 +309,18 @@ class ChatSession:
         self.store.set_current(self.session_id)
         self.convo_memory = str(payload.get("memory") or "")
         turns = payload.get("turns") if isinstance(payload.get("turns"), list) else []
-        last = turns[-1] if turns else {}
-        self.last_user_text = str(last.get("user") or "") if isinstance(last, dict) else ""
-        self.last_assistant_text = str(last.get("assistant") or "") if isinstance(last, dict) else ""
-        self.last_links = [("", u) for u in extract_http_urls(self.last_assistant_text)]
+        self.recent_turns = [
+            (str(t.get("user") or ""), str(t.get("assistant") or ""))
+            for t in turns[-(_OAC_PRIOR_TURNS + 1) :]
+            if isinstance(t, dict)
+        ]
+        if self.recent_turns:
+            self.last_user_text, self.last_assistant_text = self.recent_turns[-1]
+            self.last_links = [("", u) for u in extract_http_urls(self.last_assistant_text)]
+        else:
+            self.last_user_text = ""
+            self.last_assistant_text = ""
+            self.last_links = []
         self.messages = []
         self.full_tools_unlocked = False
         self.project_root = None
@@ -194,12 +368,20 @@ class ChatSession:
             ]
         if not self.mode.allow_mutations:
             if self.full_tools_unlocked:
-                names = READ_TOOLS + ("get_tools",)
+                names = READ_TOOLS + ("get_tools",) + tuple(CALENDAR_SESSION_TOOLS)
             else:
                 names = self.mode.tool_names or READ_TOOLS + ("get_tools",)
-            tools = tools_subset(names)
-            if self.mode.role == "oac" and self._self_identity_turn(
-                getattr(self, "_turn_user_text", "") or ""
+            # Calendar writes stay available even when OAC is otherwise read-only.
+            merged = list(names)
+            for n in CALENDAR_SESSION_TOOLS:
+                if n not in merged:
+                    merged.append(n)
+            tools = tools_subset(merged)
+            ask = getattr(self, "_turn_user_text", "") or ""
+            if (
+                self.mode.role == "oac"
+                and hayden_asking_about_self(ask)
+                and not wants_open_web(ask)
             ):
                 blocked = {"web_search", "web_fetch"}
                 tools = [
@@ -210,7 +392,11 @@ class ChatSession:
             return tools
         if self.full_tools_unlocked or self.mode.tool_names is None:
             return tools_subset(None)
-        return tools_subset(self.mode.tool_names)
+        merged = list(self.mode.tool_names)
+        for n in CALENDAR_SESSION_TOOLS:
+            if n not in merged:
+                merged.append(n)
+        return tools_subset(merged)
 
     def _rebuild_system(self) -> None:
         prompt = self.mode.prompt
@@ -223,8 +409,14 @@ class ChatSession:
             )
         if self.mode.role == "oac":
             prompt = f"{prompt}{memory_system_suffix(self.convo_memory)}"
-            if self.last_user_text or self.last_assistant_text or self.last_links:
-                prompt = f"{prompt}{last_turn_block(self.last_user_text, self.last_assistant_text, self.last_links)}"
+            injected = (self._injected_context or "").strip()
+            if injected:
+                prompt = f"{prompt}{known_context_block(injected)}"
+            turns = list(self.recent_turns)
+            if not turns and (self.last_user_text or self.last_assistant_text):
+                turns = [(self.last_user_text, self.last_assistant_text)]
+            if turns:
+                prompt = f"{prompt}{recent_turns_block(turns, self.last_links)}"
         system: list[dict[str, Any]] = [{"role": "system", "content": prompt}]
         dialogue = [m for m in self.messages if m.get("role") != "system"]
         self.messages = system + dialogue
@@ -244,7 +436,7 @@ class ChatSession:
         sections.append(
             {
                 "id": "mode_rules",
-                "label": f"Mode rules ({self.mode.id})",
+                "label": "OAC rules" if self.mode.role == "oac" else f"Mode rules ({self.mode.id})",
                 "text": (self.mode.prompt or "").strip() or "(none)",
             }
         )
@@ -262,16 +454,24 @@ class ChatSession:
         if self.mode.role == "oac":
             mem = (self.convo_memory or "").strip() or "(empty — first turn)"
             sections.append({"id": "memory", "label": "Rolling memory", "text": mem})
-            if self.last_user_text or self.last_assistant_text or self.last_links:
+            injected = (self._injected_context or "").strip()
+            if injected:
                 sections.append(
                     {
-                        "id": "previous_turn",
-                        "label": "Previous turn",
-                        "text": last_turn_block(
-                            self.last_user_text,
-                            self.last_assistant_text,
-                            self.last_links,
-                        ).strip(),
+                        "id": "known_context",
+                        "label": "Known context (auto)",
+                        "text": injected,
+                    }
+                )
+            if self.recent_turns or self.last_user_text or self.last_assistant_text or self.last_links:
+                turns = list(self.recent_turns)
+                if not turns and (self.last_user_text or self.last_assistant_text):
+                    turns = [(self.last_user_text, self.last_assistant_text)]
+                sections.append(
+                    {
+                        "id": "recent_turns",
+                        "label": "Recent turns",
+                        "text": recent_turns_block(turns, self.last_links).strip(),
                     }
                 )
 
@@ -325,9 +525,12 @@ class ChatSession:
         self.project_root = None
         self._project_prev_mode = "companion"
         self.convo_memory = ""
+        self._injected_context = ""
+        self.last_host_retry = None
         self.last_user_text = ""
         self.last_assistant_text = ""
         self.last_links = []
+        self.recent_turns = []
         if self.store and self.mode.role == "oac":
             self.session_id = self.store.new_session(mode_id=self.mode.id)
         self._rebuild_system()
@@ -345,6 +548,7 @@ class ChatSession:
         return self.mode
 
     def _maybe_autoroute(self, user_text: str) -> str | None:
+        """Silent capability switch (deep research / explicit). Never announce flavor changes."""
         if self.project_root:
             return None
         if not self.auto_mode or self.mode.role != "oac":
@@ -358,9 +562,7 @@ class ChatSession:
             and decision.confidence >= self.config.auto_mode_min_confidence
             and decision.mode_id != "soi"
         ):
-            old = self.mode.id
             self.set_mode(decision.mode_id, lock=False)
-            return f"(auto → {decision.mode_id}; was {old}; {decision.reason})"
         return None
 
     def ask(
@@ -373,6 +575,7 @@ class ChatSession:
         on_tool: ToolCallback | None = None,
         on_wait: WaitCallback | None = None,
         on_context: ContextCallback | None = None,
+        on_control: ControlCallback | None = None,
     ) -> str:
         # A prior Stop/abort can leave cancel set. A new user turn must start clean
         # or the first message after reload is immediately "(stopped)".
@@ -408,6 +611,7 @@ class ChatSession:
                 on_thinking=on_thinking,
                 on_tool=on_tool,
                 on_context=on_context,
+                on_control=on_control,
             )
         finally:
             INFERENCE_GATE.release(ticket)
@@ -421,24 +625,46 @@ class ChatSession:
         on_thinking: ThinkingCallback | None = None,
         on_tool: ToolCallback | None = None,
         on_context: ContextCallback | None = None,
+        on_control: ControlCallback | None = None,
     ) -> str:
         self.touch()
-        route_note = self._maybe_autoroute(user_text)
-        if route_note and on_token is not None:
-            on_token(f"{route_note}\n")
-
-        self.messages.append({"role": "user", "content": user_text})
+        self._maybe_autoroute(user_text)
         self._turn_user_text = user_text
-        self._trim_history()
-
         self.last_tool_names: list[str] = []
         self.last_mutating_calls: list[dict[str, Any]] = []
         self.last_tool_rounds = 0
         self._turn_hayden_db_ok = False
         self._force_prose_after_hayden_db = False
         self._hayden_db_digest = ""
+        self._injected_context = ""
+        self.last_host_retry = None
+        self._replace_stream = None
+        self._turn_calendar_rows: list[dict[str, Any]] = []
+        self._turn_calendar_about = ""
 
         if self.mode.role == "oac":
+            self._prefetch_turn_context(user_text, on_tool=on_tool)
+            self._rebuild_system()
+
+        ask_content = user_text
+        if self.mode.role == "oac":
+            bind = self._pronoun_bind_note(user_text)
+            if bind:
+                ask_content = f"{user_text}\n\n{bind}"
+        self.messages.append({"role": "user", "content": ask_content})
+        self._trim_history()
+
+        if self.mode.role == "oac":
+            cal_add = self._maybe_host_calendar_add(
+                user_text, on_token=on_token, on_tool=on_tool
+            )
+            if cal_add is not None:
+                return cal_add
+            followed = self._maybe_host_followup_action(
+                user_text, on_token=on_token, on_tool=on_tool
+            )
+            if followed is not None:
+                return followed
             opened = self._maybe_host_open_links(
                 user_text, on_token=on_token, on_tool=on_tool
             )
@@ -464,6 +690,36 @@ class ChatSession:
         hide_mem = self.mode.role == "oac"
         vis_filter = VisibleTokenFilter(on_token) if hide_mem and on_token else None
         turn_links: list[tuple[str, str]] = []
+        hold_ui = hide_mem and self.mode.role == "oac" and on_token is not None
+        held_tokens: list[str] = []
+        released_hold = not hold_ui
+
+        def _forward(delta: str) -> None:
+            if vis_filter is not None:
+                vis_filter.feed(delta)
+            elif on_token:
+                on_token(delta)
+
+        def _release_hold() -> None:
+            nonlocal released_hold
+            if released_hold:
+                return
+            released_hold = True
+            blob = "".join(held_tokens)
+            held_tokens.clear()
+            if blob:
+                _forward(blob)
+
+        def _discard_and_replace() -> None:
+            nonlocal released_hold
+            held_tokens.clear()
+            released_hold = True
+            if vis_filter is not None:
+                vis_filter.reset()
+            if on_control:
+                on_control("replace_reply")
+
+        self._replace_stream = _discard_and_replace
 
         def _token(delta: str) -> None:
             nonlocal streamed_any
@@ -471,10 +727,17 @@ class ChatSession:
                 return
             streamed_any = True
             streamed_parts.append(delta)
-            if vis_filter is not None:
-                vis_filter.feed(delta)
-            elif on_token:
-                on_token(delta)
+            if not released_hold:
+                held_tokens.append(delta)
+                preview = "".join(held_tokens)
+                if reply_looks_like_clarifier(preview) and self._will_retry_clarifier(
+                    user_text
+                ):
+                    return
+                if len(preview) >= 80:
+                    _release_hold()
+                return
+            _forward(delta)
 
         extra_mutating = {
             "save_research",
@@ -539,6 +802,13 @@ class ChatSession:
                                 final_text = final_text.rstrip() + "\n\n" + piece
                             elif not final_text:
                                 final_text = piece
+                            if not (
+                                hide_mem
+                                and self._looks_like_lost_context_clarifier(
+                                    final_text, user_text
+                                )
+                            ):
+                                _release_hold()
                             break
                         if not final_text and empty_rounds < _MAX_EMPTY_ROUNDS:
                             # Nothing but the hidden memory block (or silence). Drop the
@@ -551,22 +821,42 @@ class ChatSession:
 
                 # Preamble before tool calls (math, explanation) must survive the
                 # later "I found a video…" message — don't drop it from the turn.
+                # A "please clarify" preamble is a failed first generation; hide it.
                 if content and tool_calls and not parsed_from_text:
                     piece, mem_piece = (
                         split_reply(content) if hide_mem else (content, None)
                     )
                     if mem_piece:
                         model_mem = mem_piece
-                    if piece and piece not in (final_text or ""):
+                    if (
+                        piece
+                        and reply_looks_like_clarifier(piece)
+                        and self._will_retry_clarifier(user_text)
+                    ):
+                        _discard_and_replace()
+                    elif piece and piece not in (final_text or ""):
+                        _release_hold()
                         final_text = (
                             final_text.rstrip() + "\n\n" + piece if final_text else piece
                         )
+                    else:
+                        _release_hold()
 
                 self.last_tool_rounds += 1
                 if streamed_any and on_token:
-                    if vis_filter is not None:
-                        vis_filter.flush()
-                    on_token("\n")
+                    if not released_hold:
+                        if (
+                            content
+                            and reply_looks_like_clarifier(content)
+                            and self._will_retry_clarifier(user_text)
+                        ):
+                            _discard_and_replace()
+                        else:
+                            _release_hold()
+                    if released_hold:
+                        if vis_filter is not None:
+                            vis_filter.flush()
+                        on_token("\n")
                     streamed_any = False
                 elif streamed_any and on_thinking and not on_token:
                     on_thinking("\n")
@@ -582,6 +872,9 @@ class ChatSession:
                         args, enriched = self._maybe_enrich_web_search(args, user_text)
                         if enriched:
                             call = {"function": {"name": name, "arguments": args}}
+                    elif name == "query_calendar" and self.mode.role == "oac":
+                        args = self._shape_calendar_query_args(args)
+                        call = {"function": {"name": name, "arguments": args}}
                     if not name:
                         continue
                     tool_key = self._tool_call_key(name, args)
@@ -597,7 +890,7 @@ class ChatSession:
                             ),
                         }
                         if on_tool:
-                            on_tool("start", name, {"arguments": args})
+                            self._emit_tool_start(on_tool, name, args)
                             on_tool(
                                 "done",
                                 name,
@@ -612,9 +905,11 @@ class ChatSession:
                         continue
                     seen_tool_keys.add(tool_key)
                     if on_tool:
-                        on_tool("start", name, {"arguments": args})
+                        self._emit_tool_start(on_tool, name, args)
                     result = self._run_tool_call(call)
                     self.last_tool_names.append(name)
+                    if name == "query_calendar" and isinstance(result, dict):
+                        self._note_calendar_result(result, args)
                     if (
                         name == "query_db"
                         and isinstance(result, dict)
@@ -769,7 +1064,69 @@ class ChatSession:
         if (
             hide_mem
             and self.mode.role == "oac"
-            and self._turn_hayden_db_ok
+            and self._personal_db_turn(user_text)
+            and not (self._injected_context or "").strip()
+            and (
+                "query_db" not in set(self.last_tool_names or [])
+                or looks_like_bad_self_reply(final_text or "")
+            )
+        ):
+            nudged = self._retry_personal_with_query_db(
+                user_text,
+                stream=stream,
+                on_token=on_token,
+                on_thinking=on_thinking,
+                on_tool=on_tool,
+                think=think,
+                req_timeout=req_timeout,
+                vis_filter=vis_filter,
+                hide_mem=hide_mem,
+            )
+            if nudged:
+                final_text = nudged
+                streamed_parts = [nudged]
+
+        if (
+            hide_mem
+            and self.mode.role == "oac"
+            and not (final_text or "").strip()
+            and (
+                self._personal_db_turn(user_text)
+                or (self._injected_context or "").strip()
+            )
+        ):
+            if not (self._injected_context or getattr(self, "_hayden_db_digest", "") or "").strip():
+                nudged = self._retry_personal_with_query_db(
+                    user_text,
+                    stream=stream,
+                    on_token=on_token,
+                    on_thinking=on_thinking,
+                    on_tool=on_tool,
+                    think=think,
+                    req_timeout=req_timeout,
+                    vis_filter=vis_filter,
+                    hide_mem=hide_mem,
+                )
+                if nudged:
+                    final_text = nudged
+                    streamed_parts = [nudged]
+            if not (final_text or "").strip():
+                retry = self._retry_answer_from_hayden_db(
+                    user_text,
+                    stream=stream,
+                    on_token=on_token,
+                    on_thinking=on_thinking,
+                    think=think,
+                    req_timeout=req_timeout,
+                    vis_filter=vis_filter,
+                )
+                if retry:
+                    final_text = retry
+                    streamed_parts = [retry]
+
+        if (
+            hide_mem
+            and self.mode.role == "oac"
             and self._self_identity_turn(user_text)
             and looks_like_bad_self_reply(final_text or "")
         ):
@@ -782,9 +1139,57 @@ class ChatSession:
                 req_timeout=req_timeout,
                 vis_filter=vis_filter,
             )
+            if retry and not looks_like_bad_self_reply(retry):
+                final_text = retry
+                streamed_parts = [retry]
+
+        if (
+            hide_mem
+            and self.mode.role == "oac"
+            and self._needs_model_calendar_tool(user_text)
+        ):
+            retry = self._nudge_query_calendar(
+                user_text,
+                stream=stream,
+                on_token=on_token,
+                on_thinking=on_thinking,
+                on_tool=on_tool,
+                think=think,
+                req_timeout=req_timeout,
+                vis_filter=vis_filter,
+                tools=tools,
+            )
             if retry:
                 final_text = retry
                 streamed_parts = [retry]
+
+        if hide_mem and self.mode.role == "oac" and self._calendar_turn(user_text):
+            from ainet.calendar_store import looks_like_calendar_write
+
+            if not looks_like_calendar_write(user_text):
+                spoken = self._spoken_calendar_reply()
+                if spoken:
+                    self._begin_host_retry("calendar_format")
+                    final_text = spoken
+                    streamed_parts = [spoken]
+                    if self.messages and self.messages[-1].get("role") == "assistant":
+                        self.messages[-1]["content"] = spoken
+                    else:
+                        self.messages.append({"role": "assistant", "content": spoken})
+                    if on_token is not None:
+                        on_token(spoken)
+
+        if hide_mem and self.mode.role == "oac":
+            forced_cal = self._force_calendar_write_if_needed(
+                user_text,
+                final_text or "",
+                on_tool=on_tool,
+            )
+            if forced_cal:
+                final_text = forced_cal
+                streamed_parts = [forced_cal]
+                if on_token is not None:
+                    on_token(forced_cal)
 
         if (
             hide_mem
@@ -805,8 +1210,58 @@ class ChatSession:
                 final_text = retry
                 streamed_parts = [retry]
 
+        if hide_mem and self.mode.role == "oac":
+            cleaned = strip_leading_clarifier(final_text or "")
+            if cleaned and cleaned != (final_text or "").strip():
+                final_text = cleaned
+
+        if (
+            hide_mem
+            and self.mode.role == "oac"
+            and not self._turn_had_web_evidence()
+            and self._looks_like_lost_context_clarifier(final_text or "", user_text)
+        ):
+            retry = self._retry_answer_with_recent_context(
+                user_text,
+                stream=stream,
+                on_token=on_token,
+                on_thinking=on_thinking,
+                think=think,
+                req_timeout=req_timeout,
+                vis_filter=vis_filter,
+            )
+            if retry:
+                final_text = retry
+                streamed_parts = [retry]
+
+        if hide_mem and self.mode.role == "oac" and not self._self_identity_turn(user_text):
+            stripped = strip_profile_dump(final_text or "", self._injected_context)
+            if stripped and stripped != (final_text or "").strip():
+                final_text = stripped
+            elif (
+                looks_like_empty_therapy(final_text or "")
+                or looks_like_generic_ignore(final_text or "", user_text)
+                or looks_like_profile_dump(final_text or "")
+                or looks_like_fresh_start(final_text or "")
+            ):
+                retry = self._retry_answer_in_thread(
+                    user_text,
+                    stream=stream,
+                    on_token=on_token,
+                    on_thinking=on_thinking,
+                    think=think,
+                    req_timeout=req_timeout,
+                    vis_filter=vis_filter,
+                )
+                if retry:
+                    final_text = strip_profile_dump(retry, self._injected_context) or retry
+                    streamed_parts = [final_text]
+
+        if not released_hold:
+            _release_hold()
         if vis_filter is not None:
             vis_filter.flush()
+        self._replace_stream = None
         if hide_mem:
             visible, mem = split_reply(final_text or "")
             final_text = visible
@@ -815,12 +1270,15 @@ class ChatSession:
                 self.convo_memory = mem
             else:
                 self.convo_memory = host_fallback_memory(
-                    user_text, final_text, self.convo_memory
+                    user_text,
+                    final_text,
+                    self.convo_memory,
+                    recent_turns=self.recent_turns,
                 )
             self._strip_memory_from_stored_replies()
-            self.last_user_text = user_text
-            self.last_assistant_text = final_text
-            self.last_links = turn_links[:8]
+            self._record_completed_turn(
+                user_text, final_text, links=turn_links[:8]
+            )
             self._rebuild_system()
 
         if self.store and self.mode.role == "oac":
@@ -839,12 +1297,6 @@ class ChatSession:
                 self.session_id = current
 
         self.touch()
-        if stream and on_token is not None:
-            if route_note and final_text:
-                return f"{route_note}\n{final_text}"
-            return final_text or route_note or ""
-        if route_note:
-            return f"{route_note}\n{final_text}" if final_text else route_note
         return final_text
 
     @staticmethod
@@ -869,27 +1321,120 @@ class ChatSession:
 
     @staticmethod
     def _looks_like_stale_clarifier(reply: str, user_text: str) -> bool:
-        low = (reply or "").casefold()
-        if not low.strip():
+        if not reply_looks_like_clarifier(reply):
             return False
         ask = (user_text or "").strip()
-        clear_ask = len(ask.split()) >= 3 and (
+        return len(ask.split()) >= 3 and (
             "?" in ask
             or ask.casefold().startswith(
                 ("who ", "what ", "how ", "when ", "where ", "why ", "which ")
             )
         )
-        if not clear_ask:
-            return False
-        markers = (
-            "too vague",
-            "could you please specify",
-            "please specify what",
-            "would you like me to search",
-            "let me try a different approach",
-            "what you are referring to",
+
+    def _will_retry_clarifier(self, user_text: str) -> bool:
+        has_context = bool(
+            standing_request(self.convo_memory).strip()
+            or self.recent_turns
+            or (self.last_user_text and self.last_assistant_text)
         )
-        return any(m in low for m in markers)
+        if not has_context:
+            return False
+        return is_vague_pronoun_followup(user_text) or len((user_text or "").split()) <= 10
+
+    def _looks_like_lost_context_clarifier(self, reply: str, user_text: str) -> bool:
+        """First generation asked to clarify despite recent turns already naming the topic."""
+        if not reply_looks_like_clarifier(reply):
+            return False
+        return self._will_retry_clarifier(user_text)
+
+    def _begin_host_retry(self, reason: str) -> None:
+        self.last_host_retry = reason
+        replace = getattr(self, "_replace_stream", None)
+        if callable(replace):
+            replace()
+
+    def _pronoun_bind_note(self, user_text: str) -> str:
+        """Tell the model what 'it' is *before* it asks."""
+        has_pronoun = bool(
+            re.search(r"\b(?:it|that|this|them|those)\b", user_text or "", re.I)
+        )
+        if not has_pronoun and not is_vague_pronoun_followup(user_text):
+            return ""
+        topic = followup_topic(self.convo_memory, self.recent_turns)
+        if not topic:
+            return ""
+        if not is_vague_pronoun_followup(user_text) and len((user_text or "").split()) > 18:
+            return ""
+        return (
+            f"(Host: it/that/this in this message refers to: {topic}. "
+            "Answer that. Do not ask what 'it' means or say the question is ambiguous.)"
+        )
+
+    def _retry_answer_with_recent_context(
+        self,
+        user_text: str,
+        *,
+        stream: bool,
+        on_token: TokenCallback | None,
+        on_thinking: ThinkingCallback | None,
+        think: bool,
+        req_timeout: float,
+        vis_filter: VisibleTokenFilter | None,
+    ) -> str:
+        """Force an answer that binds pronouns to recent turns / standing request."""
+        self._begin_host_retry("lost_context_clarifier")
+        if self.messages and self.messages[-1].get("role") == "assistant":
+            self.messages.pop()
+        topic = standing_request(self.convo_memory).strip()
+        prior = ""
+        if self.recent_turns:
+            u, a = self.recent_turns[-1]
+            prior = f"Latest prior ask was {u!r}; you answered about that topic."
+        elif self.last_user_text:
+            prior = f"Latest prior ask was {self.last_user_text!r}."
+        topic_bit = f" Standing request: {topic}." if topic else ""
+        self.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Host note: Hayden's follow-up depends on recent conversation context. "
+                    f"Message: {user_text!r}. {prior}{topic_bit} "
+                    "Resolve pronouns (it/that/this) from Recent turns / Standing request and "
+                    "answer now. Do not ask what 'it' means or ask clarifying questions."
+                ),
+            }
+        )
+        try:
+            if stream and (on_token is not None or on_thinking is not None):
+
+                def _tok(delta: str) -> None:
+                    if vis_filter is not None:
+                        vis_filter.feed(delta)
+                    elif on_token is not None:
+                        on_token(delta)
+
+                response = self.client.chat_stream(
+                    self.messages,
+                    tools=None,
+                    think=think,
+                    timeout_s=req_timeout,
+                    on_token=_tok if on_token is not None else None,
+                    on_thinking=on_thinking,
+                )
+            else:
+                response = self.client.chat(
+                    self.messages,
+                    tools=None,
+                    think=think,
+                    timeout_s=req_timeout,
+                )
+        except Exception:
+            return ""
+        message = response.get("message") or {}
+        self.messages.append(message)
+        content = str(message.get("content") or "")
+        visible, _mem = split_reply(content)
+        return (visible or content).strip()
 
     def _retry_answer_after_web(
         self,
@@ -903,6 +1448,7 @@ class ChatSession:
         vis_filter: VisibleTokenFilter | None,
     ) -> str:
         """One forced answer pass when the model ignored successful web evidence."""
+        self._begin_host_retry("stale_clarifier_after_web")
         # Drop the bad assistant turn if it is still the last message.
         if self.messages and self.messages[-1].get("role") == "assistant":
             self.messages.pop()
@@ -949,6 +1495,125 @@ class ChatSession:
         visible, _mem = split_reply(content)
         return (visible or content).strip()
 
+    def _retry_personal_with_query_db(
+        self,
+        user_text: str,
+        *,
+        stream: bool,
+        on_token: TokenCallback | None,
+        on_thinking: ThinkingCallback | None,
+        on_tool: ToolCallback | None,
+        think: bool,
+        req_timeout: float,
+        vis_filter: VisibleTokenFilter | None,
+        hide_mem: bool,
+    ) -> str:
+        """If the model skipped query_db on a personal ask, host-lookup then answer from digest."""
+        self._begin_host_retry("personal_query_db")
+        _ = on_tool, hide_mem
+        if self.messages and self.messages[-1].get("role") == "assistant":
+            self.messages.pop()
+
+        tokens = [
+            t
+            for t in re.split(r"\W+", user_text.casefold())
+            if len(t) > 2
+            and t
+            not in {
+                "what",
+                "about",
+                "have",
+                "been",
+                "with",
+                "does",
+                "did",
+                "the",
+                "and",
+                "you",
+                "any",
+                "for",
+                "how",
+                "do",
+                "who",
+                "where",
+                "when",
+                "like",
+                "know",
+                "tell",
+                "something",
+            }
+        ][:8]
+        # Broad multi-word search first (omit dest). Self-identity also tries hayden.
+        attempts: list[dict[str, Any]] = []
+        if tokens:
+            attempts.append({"q": " ".join(tokens)})
+        if self._self_identity_turn(user_text):
+            attempts.append({"dest": "hayden"})
+        attempts.append({})  # full scan fallback
+
+        result: dict[str, Any] = {"ok": False, "digest": "", "matches": []}
+        args: dict[str, Any] = {}
+        for args in attempts:
+            call = {"function": {"name": "query_db", "arguments": args}}
+            candidate = self._run_tool_call(call)
+            if isinstance(candidate, dict) and (
+                candidate.get("digest") or candidate.get("matches")
+            ):
+                result = candidate
+                break
+            if isinstance(candidate, dict):
+                result = candidate
+
+        self.last_tool_names = list(self.last_tool_names or []) + ["query_db"]
+
+        digest = ""
+        if isinstance(result, dict):
+            digest = str(result.get("digest") or "").strip()
+            if not digest:
+                parts: list[str] = []
+                for row in result.get("matches") or []:
+                    if not isinstance(row, dict):
+                        continue
+                    for entry in row.get("entries") or []:
+                        if isinstance(entry, dict) and entry.get("text"):
+                            parts.append(str(entry["text"]))
+                digest = "\n".join(parts[:12])
+
+        self._turn_hayden_db_ok = True
+        self._hayden_db_digest = digest
+
+        self.messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": "query_db", "arguments": args},
+                    }
+                ],
+            }
+        )
+        self.messages.append(
+            {
+                "role": "tool",
+                "content": json.dumps(
+                    result if isinstance(result, dict) else {"ok": False},
+                    ensure_ascii=False,
+                ),
+            }
+        )
+
+        return self._retry_answer_from_hayden_db(
+            user_text,
+            stream=stream,
+            on_token=on_token,
+            on_thinking=on_thinking,
+            think=think,
+            req_timeout=req_timeout,
+            vis_filter=vis_filter,
+        )
+
     def _retry_answer_from_hayden_db(
         self,
         user_text: str,
@@ -960,7 +1625,8 @@ class ChatSession:
         req_timeout: float,
         vis_filter: VisibleTokenFilter | None,
     ) -> str:
-        """Force a plain spoken answer from hayden.json digest — not meta, not role-play."""
+        """Force a plain spoken answer from stored digest — not meta, not role-play."""
+        self._begin_host_retry("hayden_db_answer")
         digest = (getattr(self, "_hayden_db_digest", "") or "").strip()
         if not digest:
             digest = self._hayden_digest_from_messages()
@@ -972,11 +1638,12 @@ class ChatSession:
                 "role": "user",
                 "content": (
                     f"Hayden asked: {user_text!r}\n\n"
-                    "Stored facts about Hayden (from query_db):\n"
+                    "Stored facts from query_db:\n"
                     f"{body}\n\n"
-                    "Answer NOW in plain speech, second person (you/your). "
-                    "You are AI1, not Hayden — never say I'm Hayden. "
-                    "Summarize what the stored text says. No meta talk, no offers to summarize, no web search."
+                "Answer NOW in plain speech, second person (you/your). "
+                "You are AI1, not Hayden — never say I'm Hayden. "
+                "Use only the facts that answer the question. "
+                "No meta talk, no biography dump, no offers to summarize, no web search."
                 ),
             }
         )
@@ -1034,13 +1701,31 @@ class ChatSession:
     ) -> tuple[dict[str, Any], bool]:
         raw_q = args.get("query")
         query = str(raw_q or "").strip()
-        topic = standing_request(self.convo_memory)
+        topic = topic_for_search(self.convo_memory, self.recent_turns) or standing_request(
+            self.convo_memory
+        )
         new_q, changed = enrich_web_search_query(query, user_text, topic)
         if not changed:
             return args, False
         out = dict(args)
         out["query"] = new_q
         return out, True
+
+    def _emit_tool_start(
+        self,
+        on_tool: ToolCallback | None,
+        name: str,
+        args: dict[str, Any] | None,
+    ) -> None:
+        if on_tool is None:
+            return
+        payload = dict(args or {})
+        about = _clip_about(str(payload.get("about") or ""))
+        if not about:
+            about = default_tool_about(name, payload)
+        if about:
+            payload["about"] = about
+        on_tool("start", name, {"arguments": payload})
 
     @staticmethod
     def _tool_call_key(name: str, args: dict[str, Any]) -> str:
@@ -1111,11 +1796,590 @@ class ChatSession:
             return path or "ok"
         if name == "query_db":
             return f"{result.get('count', 0)} matches"
+        if name == "query_calendar":
+            return f"{result.get('count', 0)} events"
+        if name == "add_calendar_event":
+            ev = result.get("event") if isinstance(result.get("event"), dict) else {}
+            return str(ev.get("title") or "added")
+        if name == "update_calendar_event":
+            ev = result.get("event") if isinstance(result.get("event"), dict) else {}
+            return str(ev.get("title") or ev.get("id") or "updated")
+        if name == "cancel_calendar_event":
+            return "deleted" if result.get("deleted") else "cancelled"
         if name in {"list_dir", "tree"}:
             kids = result.get("children") or result.get("entries")
             if isinstance(kids, list):
                 return f"{len(kids)} entries"
         return "ok"
+
+    def _commit_host_reply(
+        self,
+        user_text: str,
+        reply: str,
+        *,
+        on_token: TokenCallback | None,
+        tool_names: list[str] | None = None,
+        links: list[tuple[str, str]] | None = None,
+    ) -> str:
+        if on_token:
+            on_token(reply)
+        self.messages.append({"role": "assistant", "content": reply})
+        if tool_names is not None:
+            self.last_tool_names = list(tool_names)
+        self._record_completed_turn(user_text, reply, links=links)
+        self.convo_memory = host_fallback_memory(
+            user_text, reply, self.convo_memory, recent_turns=self.recent_turns
+        )
+        self._rebuild_system()
+        if self.store and self.mode.role == "oac":
+            if not self.session_id or not self.store.session_exists(self.session_id):
+                self.session_id = self.store.ensure_session(mode_id=self.mode.id)
+            self.store.append_turn(
+                self.session_id,
+                user_text=user_text,
+                assistant_text=reply,
+                mode_id=self.mode.id,
+                memory=self.convo_memory,
+            )
+            current = self.store.current_session_id()
+            if current:
+                self.session_id = current
+        self.touch()
+        return reply
+
+    def _host_followup_intent(self, user_text: str) -> str | None:
+        """videos / search / ack — host handles these so the model cannot re-lecture."""
+        last_a = self.last_assistant_text or (
+            self.recent_turns[-1][1] if self.recent_turns else ""
+        )
+        pending_video = last_user_wanted_videos(self.recent_turns) or offered_to_search(
+            last_a
+        )
+        if wants_videos(user_text):
+            return "videos"
+        if is_vague_search_followup(user_text) and not wants_videos(user_text):
+            return "videos" if pending_video else "search"
+        if is_action_confirm(user_text):
+            # Calendar offers must never fall through to web_search.
+            if offered_to_calendar(last_a):
+                return None
+            from ainet.calendar_store import looks_like_calendar_write
+
+            prior = self.last_user_text or ""
+            if looks_like_calendar_write(prior):
+                return None
+            if pending_video or wants_videos(self.last_user_text or ""):
+                return "videos"
+            if offered_to_search(last_a) or is_vague_search_followup(
+                self.last_user_text or ""
+            ):
+                return "search"
+            return None
+        if is_short_ack(user_text):
+            if pending_video:
+                return "videos"
+            return "ack"
+        return None
+
+    def _calendar_source_text(self, user_text: str) -> str:
+        """For 'yes' after a calendar offer, use the prior ask that named the event."""
+        from ainet.calendar_store import looks_like_calendar_write
+
+        if looks_like_calendar_write(user_text):
+            return user_text
+        last_a = self.last_assistant_text or (
+            self.recent_turns[-1][1] if self.recent_turns else ""
+        )
+        if is_action_confirm(user_text) and (
+            offered_to_calendar(last_a)
+            or looks_like_calendar_write(self.last_user_text or "")
+        ):
+            return self.last_user_text or standing_request(self.convo_memory) or ""
+        return ""
+
+    def _maybe_host_calendar_add(
+        self,
+        user_text: str,
+        *,
+        on_token: TokenCallback | None,
+        on_tool: ToolCallback | None,
+        force: bool = False,
+        commit: bool = True,
+    ) -> str | None:
+        """Add a calendar event from clear wording (or a yes after offering to add)."""
+        from ainet.calendar_store import (
+            looks_like_calendar_write,
+            parse_event_from_text,
+        )
+
+        source = self._calendar_source_text(user_text)
+        if not source:
+            if looks_like_calendar_write(user_text) or force:
+                source = user_text
+            else:
+                return None
+        payload = parse_event_from_text(source)
+        if not payload:
+            return None
+        # Only auto-add when we have a concrete start (timed or dated).
+        if not payload.get("start"):
+            return None
+        about = str(payload.get("title") or "new event")
+        if on_tool:
+            self._emit_tool_start(
+                on_tool,
+                "add_calendar_event",
+                {**payload, "about": about},
+            )
+        try:
+            result = self._run_tool_call(
+                {"function": {"name": "add_calendar_event", "arguments": dict(payload)}}
+            )
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": str(exc)}
+        self.last_tool_names = list(getattr(self, "last_tool_names", None) or []) + [
+            "add_calendar_event"
+        ]
+        ok = bool(isinstance(result, dict) and result.get("ok"))
+        summary = self._tool_result_summary(
+            "add_calendar_event", result if isinstance(result, dict) else {}
+        )
+        if on_tool:
+            on_tool(
+                "done",
+                "add_calendar_event",
+                {"ok": ok, "summary": summary or ("saved" if ok else "failed")},
+            )
+        if not ok:
+            err = ""
+            if isinstance(result, dict):
+                err = str(result.get("error") or "")
+            reply = f"Couldn't add that to your calendar{': ' + err if err else '.'}"
+            if not commit:
+                return reply
+            return self._commit_host_reply(
+                user_text,
+                reply,
+                on_token=on_token,
+                tool_names=list(getattr(self, "last_tool_names", None) or []),
+            )
+        event = result.get("event") if isinstance(result, dict) else None
+        title = ""
+        start = ""
+        end = ""
+        loc = ""
+        if isinstance(event, dict):
+            title = str(event.get("title") or payload.get("title") or "Event")
+            start = str(event.get("start") or payload.get("start") or "")
+            end = str(event.get("end") or payload.get("end") or "")
+            loc = str(event.get("location") or payload.get("location") or "")
+        else:
+            title = str(payload.get("title") or "Event")
+            start = str(payload.get("start") or "")
+            end = str(payload.get("end") or "")
+            loc = str(payload.get("location") or "")
+        when = start
+        if end and end != start:
+            when = f"{start} to {end}"
+        bits = [f"Added {title}", when]
+        if loc:
+            bits.append(loc)
+        reply = " · ".join(b for b in bits if b)
+        if not commit:
+            return reply
+        return self._commit_host_reply(
+            user_text,
+            reply,
+            on_token=on_token,
+            tool_names=list(getattr(self, "last_tool_names", None) or []),
+        )
+
+    def _force_calendar_write_if_needed(
+        self,
+        user_text: str,
+        final_text: str,
+        *,
+        on_tool: ToolCallback | None,
+    ) -> str | None:
+        """If Hayden asked to set the calendar and nothing was written, write it now."""
+        from ainet.calendar_store import looks_like_calendar_write, parse_event_from_text
+
+        _ = final_text
+        if not looks_like_calendar_write(user_text):
+            return None
+        names = set(getattr(self, "last_tool_names", None) or [])
+        if "add_calendar_event" in names:
+            return None
+        if not parse_event_from_text(self._calendar_source_text(user_text) or user_text):
+            return None
+        self._begin_host_retry("calendar_write")
+        if self.messages and self.messages[-1].get("role") == "assistant":
+            self.messages.pop()
+        reply = self._maybe_host_calendar_add(
+            user_text,
+            on_token=None,
+            on_tool=on_tool,
+            force=True,
+            commit=False,
+        )
+        if not reply:
+            return None
+        self.messages.append({"role": "assistant", "content": reply})
+        return reply
+
+    def _shape_calendar_query_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Pin the lookup to the date Hayden asked for; treat 'today's stuff' as today."""
+        from ainet.calendar_store import infer_schedule_query, looks_like_calendar_write
+
+        ask = str(getattr(self, "_turn_user_text", "") or "")
+        if looks_like_calendar_write(ask):
+            return args
+        blob = " ".join(
+            part
+            for part in (
+                ask,
+                str((args or {}).get("q") or ""),
+                str((args or {}).get("about") or ""),
+                str((args or {}).get("query") or ""),
+            )
+            if str(part or "").strip()
+        )
+        if not blob.strip():
+            return args
+        inferred = infer_schedule_query(blob)
+        out = dict(args or {})
+        out["start"] = str(inferred.get("start") or out.get("start") or "")
+        out["end"] = str(inferred.get("end") or out.get("end") or "")
+        q = str(inferred.get("q") or "").strip()
+        if q:
+            out["q"] = q
+        else:
+            out.pop("q", None)
+            out.pop("query", None)
+        if inferred.get("date_explicit"):
+            out.pop("upcoming", None)
+        elif inferred.get("upcoming"):
+            out["upcoming"] = inferred.get("upcoming")
+        else:
+            out.pop("upcoming", None)
+        out["about"] = str(inferred.get("about") or out.get("about") or "calendar")
+        return out
+
+    def _note_calendar_result(self, result: dict[str, Any], args: dict[str, Any] | None = None) -> None:
+        rows = [e for e in (result.get("events") or []) if isinstance(e, dict)]
+        self._turn_calendar_rows = rows
+        about = ""
+        if isinstance(args, dict):
+            about = str(args.get("about") or "").strip()
+        if not about:
+            about = default_tool_about(
+                "query_calendar",
+                {
+                    "start": result.get("start"),
+                    "end": result.get("end"),
+                    "about": "",
+                },
+            )
+        self._turn_calendar_about = about
+
+    def _spoken_calendar_reply(self) -> str:
+        from ainet.calendar_store import spoken_schedule
+
+        rows = list(getattr(self, "_turn_calendar_rows", None) or [])
+        about = str(getattr(self, "_turn_calendar_about", "") or "")
+        if not rows and not about:
+            return ""
+        return spoken_schedule(rows, about=about)
+
+    def _calendar_turn(self, user_text: str) -> bool:
+        from ainet.calendar_store import looks_like_calendar_write, looks_like_schedule_ask
+
+        if looks_like_calendar_write(user_text):
+            return True
+        return looks_like_schedule_ask(user_text) or should_prefetch_calendar(
+            user_text, standing_request(self.convo_memory), self.recent_turns
+        )
+
+    @staticmethod
+    def _looks_like_missing_calendar_reply(reply: str) -> bool:
+        low = (reply or "").casefold()
+        if not low.strip():
+            return False
+        markers = (
+            "don't have access",
+            "do not have access",
+            "no access to your",
+            "don't have your",
+            "do not have your",
+            "can't access your schedule",
+            "cannot access your schedule",
+            "check your course syllabus",
+            "contact your academic advisor",
+            "university portal",
+            "i don't have your personal",
+            "i do not have your personal",
+            "specific details about your enrollment",
+        )
+        return any(m in low for m in markers)
+
+    def _needs_model_calendar_tool(self, user_text: str) -> bool:
+        from ainet.calendar_store import looks_like_calendar_write
+
+        if looks_like_calendar_write(user_text):
+            return False
+        if not self._calendar_turn(user_text):
+            return False
+        names = set(getattr(self, "last_tool_names", None) or [])
+        return "query_calendar" not in names
+
+    def _nudge_query_calendar(
+        self,
+        user_text: str,
+        *,
+        stream: bool,
+        on_token: TokenCallback | None,
+        on_thinking: ThinkingCallback | None,
+        on_tool: ToolCallback | None,
+        think: bool,
+        req_timeout: float,
+        vis_filter: VisibleTokenFilter | None,
+        tools: list[dict[str, Any]] | None,
+    ) -> str:
+        """If the model skipped query_calendar on a schedule ask, tell it to call it."""
+        from ainet.calendar_store import infer_schedule_query
+
+        self._begin_host_retry("calendar_tool")
+        if self.messages and self.messages[-1].get("role") == "assistant":
+            self.messages.pop()
+        inferred = infer_schedule_query(user_text)
+        start = str(inferred.get("start") or "")
+        end = str(inferred.get("end") or "")
+        self.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"Host note: Hayden asked about his schedule: {user_text!r}. "
+                    "You have not called query_calendar yet. Call query_calendar now "
+                    f"with start={start!r} and end={end!r}. Leave q empty. "
+                    "Do not invent events. Do not answer until the tool returns."
+                ),
+            }
+        )
+        try:
+            response = self.client.chat(
+                self.messages,
+                tools=tools,
+                think=think,
+                timeout_s=req_timeout,
+            )
+        except Exception:
+            return ""
+        message = response.get("message") or {}
+        self.messages.append(message)
+        tool_calls = message.get("tool_calls") or []
+        for call in tool_calls:
+            fn = call.get("function") or {}
+            name = str(fn.get("name") or "")
+            raw_args = fn.get("arguments", {})
+            if isinstance(raw_args, str):
+                try:
+                    args = json.loads(raw_args) if raw_args.strip() else {}
+                except json.JSONDecodeError:
+                    args = {}
+            elif isinstance(raw_args, dict):
+                args = raw_args
+            else:
+                args = {}
+            if name != "query_calendar":
+                continue
+            args = self._shape_calendar_query_args(args)
+            if on_tool:
+                self._emit_tool_start(on_tool, name, args)
+            result = self._run_tool_call(
+                {"function": {"name": name, "arguments": args}}
+            )
+            self.last_tool_names = list(self.last_tool_names or []) + [name]
+            if name == "query_calendar" and isinstance(result, dict):
+                self._note_calendar_result(result, args)
+            if on_tool:
+                summary = self._tool_result_summary(
+                    name, result if isinstance(result, dict) else {}
+                )
+                on_tool(
+                    "done",
+                    name,
+                    {
+                        "ok": bool(isinstance(result, dict) and result.get("ok")),
+                        "summary": summary,
+                    },
+                )
+            self.messages.append(
+                {
+                    "role": "tool",
+                    "content": json.dumps(
+                        result if isinstance(result, dict) else {"ok": False},
+                        ensure_ascii=False,
+                    ),
+                }
+            )
+        if "query_calendar" not in set(self.last_tool_names or []):
+            # Model still skipped the tool — run the real lookup (not auto-context).
+            from ainet.calendar_store import infer_schedule_query
+
+            inferred = infer_schedule_query(user_text)
+            args = {
+                "start": str(inferred.get("start") or ""),
+                "end": str(inferred.get("end") or ""),
+                "about": str(inferred.get("about") or "schedule"),
+            }
+            if on_tool:
+                self._emit_tool_start(on_tool, "query_calendar", args)
+            result = self._run_tool_call(
+                {"function": {"name": "query_calendar", "arguments": args}}
+            )
+            self.last_tool_names = list(self.last_tool_names or []) + ["query_calendar"]
+            if isinstance(result, dict):
+                self._note_calendar_result(result, args)
+            if on_tool:
+                summary = self._tool_result_summary(
+                    "query_calendar", result if isinstance(result, dict) else {}
+                )
+                on_tool(
+                    "done",
+                    "query_calendar",
+                    {
+                        "ok": bool(isinstance(result, dict) and result.get("ok")),
+                        "summary": summary,
+                    },
+                )
+            self.messages.append(
+                {
+                    "role": "tool",
+                    "content": json.dumps(
+                        result if isinstance(result, dict) else {"ok": False},
+                        ensure_ascii=False,
+                    ),
+                }
+            )
+
+        if "query_calendar" not in set(self.last_tool_names or []):
+            return ""
+        return self._spoken_calendar_reply() or ""
+
+    def _retry_answer_from_calendar(
+        self,
+        user_text: str,
+        *,
+        stream: bool,
+        on_token: TokenCallback | None,
+        on_thinking: ThinkingCallback | None,
+        on_tool: ToolCallback | None,
+        think: bool,
+        req_timeout: float,
+        vis_filter: VisibleTokenFilter | None,
+    ) -> str:
+        """Kept for callers; schedule asks now go through _nudge_query_calendar."""
+        return self._nudge_query_calendar(
+            user_text,
+            stream=stream,
+            on_token=on_token,
+            on_thinking=on_thinking,
+            on_tool=on_tool,
+            think=think,
+            req_timeout=req_timeout,
+            vis_filter=vis_filter,
+            tools=self._active_tools(),
+        )
+
+    def _maybe_host_followup_action(
+        self,
+        user_text: str,
+        *,
+        on_token: TokenCallback | None,
+        on_tool: ToolCallback | None,
+    ) -> str | None:
+        """Run video/search follow-ups (and short acks) without waiting on the model."""
+        intent = self._host_followup_intent(user_text)
+        if intent is None:
+            return None
+        if intent == "ack":
+            return self._commit_host_reply(
+                user_text, "Yep.", on_token=on_token, tool_names=[]
+            )
+        topic = named_search_topic(user_text) or topic_for_search(
+            self.convo_memory, self.recent_turns
+        )
+        if not topic:
+            return None
+        if intent == "videos":
+            query = topic if re.search(r"\byoutube\b", topic, re.I) else f"{topic} youtube"
+        else:
+            query = topic
+        if on_tool:
+            card = topic if intent == "videos" else query
+            self._emit_tool_start(
+                on_tool,
+                "web_search",
+                {"query": query, "auto": True, "about": card},
+            )
+        try:
+            result = self._run_tool_call(
+                {"function": {"name": "web_search", "arguments": {"query": query}}}
+            )
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": str(exc), "query": query, "results": []}
+        self.last_tool_names = list(self.last_tool_names or []) + ["web_search"]
+        if not isinstance(result, dict):
+            result = {"ok": False, "query": query, "results": []}
+        result["query"] = str(result.get("query") or query)
+        if not self._user_opts_out_of_open(user_text):
+            result = self._auto_open_from_search(
+                result,
+                on_tool=on_tool,
+                seen_tool_keys=set(),
+                fetch=False,
+            )
+        opened = result.get("auto_opened") if isinstance(result.get("auto_opened"), list) else []
+        if on_tool:
+            summary = self._tool_result_summary("web_search", result)
+            done: dict[str, Any] = {
+                "ok": bool(result.get("ok", True)),
+                "summary": summary,
+            }
+            if opened:
+                done["articles"] = opened[:3]
+            on_tool("done", "web_search", done)
+        titles = [
+            str(row.get("title") or row.get("url") or "").strip()
+            for row in opened
+            if isinstance(row, dict)
+        ]
+        titles = [t for t in titles if t][:3]
+        if titles:
+            lines = "\n".join(f"- {t}" for t in titles)
+            n = len(titles)
+            reply = (
+                f"Opened {n} video{'s' if n != 1 else ''} in Chrome:\n{lines}"
+                if intent == "videos"
+                else f"Opened {n} tab{'s' if n != 1 else ''} in Chrome:\n{lines}"
+            )
+        elif result.get("ok") and result.get("results"):
+            reply = "Searched, but nothing good to open."
+        else:
+            err = str(result.get("error") or "search failed")
+            reply = f"Couldn't search: {err}"
+        links = [
+            (str(row.get("title") or ""), str(row.get("url") or ""))
+            for row in opened
+            if isinstance(row, dict) and str(row.get("url") or "").startswith("http")
+        ]
+        return self._commit_host_reply(
+            user_text,
+            reply,
+            on_token=on_token,
+            tool_names=list(self.last_tool_names or []),
+            links=links,
+        )
 
     def _wants_open_prior_links(self, user_text: str) -> bool:
         t = (user_text or "").lower()
@@ -1158,7 +2422,7 @@ class ChatSession:
 
         urls = [url for _title, url in rows]
         if on_tool:
-            on_tool("start", "open_chrome", {"arguments": {"urls": urls}})
+            self._emit_tool_start(on_tool, "open_chrome", {"urls": urls})
         try:
             result = open_chrome(urls=urls, new_tab=True)
             ok = bool(result.get("ok", True))
@@ -1175,29 +2439,13 @@ class ChatSession:
             reply = "Opened in Chrome." if n == 1 else f"Opened {n} tabs in Chrome."
         else:
             reply = f"Couldn't open Chrome: {err}"
-        if on_token:
-            on_token(reply)
-        self.messages.append({"role": "assistant", "content": reply})
-        self.last_tool_names = ["open_chrome"]
-        self.last_user_text = user_text
-        self.last_assistant_text = reply
-        self.convo_memory = host_fallback_memory(user_text, reply, self.convo_memory)
-        self._rebuild_system()
-        if self.store and self.mode.role == "oac":
-            if not self.session_id or not self.store.session_exists(self.session_id):
-                self.session_id = self.store.ensure_session(mode_id=self.mode.id)
-            self.store.append_turn(
-                self.session_id,
-                user_text=user_text,
-                assistant_text=reply,
-                mode_id=self.mode.id,
-                memory=self.convo_memory,
-            )
-            current = self.store.current_session_id()
-            if current:
-                self.session_id = current
-        self.touch()
-        return reply
+        return self._commit_host_reply(
+            user_text,
+            reply,
+            on_token=on_token,
+            tool_names=["open_chrome"],
+            links=rows,
+        )
 
     @staticmethod
     def _user_opts_out_of_open(user_text: str) -> bool:
@@ -1296,6 +2544,7 @@ class ChatSession:
         *,
         on_tool: ToolCallback | None,
         seen_tool_keys: set[str],
+        fetch: bool = True,
     ) -> dict[str, Any]:
         results = search_result.get("results")
         if not isinstance(results, list) or not results:
@@ -1325,10 +2574,8 @@ class ChatSession:
 
         urls = [p["url"] for p in fresh]
         if on_tool:
-            on_tool(
-                "start",
-                "open_chrome",
-                {"arguments": {"urls": urls, "new_tab": True}},
+            self._emit_tool_start(
+                on_tool, "open_chrome", {"urls": urls, "new_tab": True}
             )
         try:
             chrome_result = open_chrome(urls=urls, new_tab=True)
@@ -1357,6 +2604,19 @@ class ChatSession:
 
         if not ok:
             return search_result
+
+        q = str(search_result.get("query") or "").lower()
+        want_video = any(
+            w in q for w in ("youtube", "youtu.be", "video", "watch", "tutorial")
+        )
+        if not fetch or want_video:
+            out = dict(search_result)
+            out["auto_opened"] = cards
+            out["hint"] = (
+                f"Host already opened {len(cards)} URL(s) in Chrome (see auto_opened). "
+                "Confirm that briefly. Do not re-explain the topic."
+            )
+            return out
 
         from ainet.tools.web import web_fetch
 
@@ -1412,7 +2672,7 @@ class ChatSession:
         rest = [self._compact_message(m) for m in self.messages if m.get("role") != "system"]
         rest = self._drop_orphan_tools(rest)
 
-        # OAC: memory + previous turn (prose) + current turn. Drop old tool dumps.
+        # OAC: memory + last 2 prior prose turns + current turn. Drop older tool dumps.
         if self.mode.role == "oac":
             rest = self._keep_oac_recent(rest)
             self.messages = system + rest
@@ -1447,17 +2707,22 @@ class ChatSession:
         self.messages = system + rest
 
     def _keep_oac_recent(self, rest: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Previous user+reply (text only) + current user turn (including in-flight tools)."""
+        """Last N prior user+reply (text only) + current user turn (including in-flight tools)."""
         user_idxs = [i for i, m in enumerate(rest) if m.get("role") == "user"]
         if not user_idxs:
             return rest
         current = user_idxs[-1]
-        current_turn = rest[current:]
-        if len(user_idxs) < 2:
-            return self._drop_orphan_tools(current_turn)
-        prev = user_idxs[-2]
-        prior = self._prose_only_turn(rest[prev:current])
-        return self._drop_orphan_tools(prior + current_turn)
+        keep_start_idx = max(0, len(user_idxs) - 1 - _OAC_PRIOR_TURNS)
+        out: list[dict[str, Any]] = []
+        for pos in range(keep_start_idx, len(user_idxs)):
+            start = user_idxs[pos]
+            end = user_idxs[pos + 1] if pos + 1 < len(user_idxs) else len(rest)
+            chunk = rest[start:end]
+            if start == current:
+                out.extend(chunk)
+            else:
+                out.extend(self._prose_only_turn(chunk))
+        return self._drop_orphan_tools(out)
 
     @staticmethod
     def _prose_only_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1649,8 +2914,8 @@ class ChatSession:
         if name == "query_db" and isinstance(result, dict) and self.mode.role == "oac":
             slim = dict(result)
             note = (
-                "Answer Hayden in plain words from matches[].entries[].text. "
-                "Do not recite count, strength, or resistance_days unless he asked for stats."
+                "Answer from the facts that matter to THIS message. "
+                "Do not recap Hayden's whole biography or list unrelated traits."
             )
             existing = str(slim.get("hint") or "").strip()
             slim["hint"] = f"{existing} {note}".strip() if existing else note
@@ -1724,18 +2989,23 @@ class ChatSession:
             return self._handle_project_session_tool(name, args)
 
         if not self.mode.allow_mutations:
-            allowed = set(READ_TOOLS) | {"get_tools", "getTools"} | set(PROJECT_SESSION_TOOLS)
+            allowed = (
+                set(READ_TOOLS)
+                | {"get_tools", "getTools"}
+                | set(PROJECT_SESSION_TOOLS)
+                | set(CALENDAR_SESSION_TOOLS)
+            )
             if self.mode.tool_names:
                 allowed |= set(self.mode.tool_names)
-            # create_project is mutating but explicitly allowed as a session tool.
-            if name in PROJECT_SESSION_TOOLS:
+            # create_project / calendar writes are mutating but allowed as session tools.
+            if name in PROJECT_SESSION_TOOLS or name in CALENDAR_SESSION_TOOLS:
                 pass
             elif name not in allowed or name in _MUTATING:
                 return {
                     "ok": False,
                     "error": (
                         f"OAC cannot use tool '{name}'. "
-                        "Allowed: read/web + create/open/close project. "
+                        "Allowed: read/web + calendar + create/open/close project. "
                         "SOI files lasting DB writes from the changelog after idle."
                     ),
                 }
@@ -1745,6 +3015,7 @@ class ChatSession:
             and name not in self.mode.tool_names
             and name not in {"get_tools", "getTools"}
             and name not in PROJECT_SESSION_TOOLS
+            and name not in CALENDAR_SESSION_TOOLS
         ):
             return {
                 "ok": False,
@@ -1784,12 +3055,37 @@ class ChatSession:
             if guard is not None:
                 return guard
 
+        if name == "query_calendar" and self.mode.role == "oac":
+            args = self._shape_calendar_query_args(args)
+
         if name in {"web_search", "web_fetch"} and self.mode.role == "oac":
             guard = self._reject_open_web_for_self(
                 str(getattr(self, "_turn_user_text", "") or "")
             )
             if guard is not None:
                 return guard
+            ask = str(getattr(self, "_turn_user_text", "") or "")
+            from ainet.calendar_store import looks_like_calendar_write
+
+            if looks_like_calendar_write(ask) or (
+                is_action_confirm(ask)
+                and (
+                    offered_to_calendar(
+                        self.last_assistant_text
+                        or (self.recent_turns[-1][1] if self.recent_turns else "")
+                    )
+                    or looks_like_calendar_write(self.last_user_text or "")
+                )
+            ):
+                return {
+                    "ok": False,
+                    "blocked": True,
+                    "error": "web_search is blocked while adding a calendar event.",
+                    "hint": (
+                        "Call add_calendar_event with title, start, end (or duration_minutes), "
+                        "and optional location. Do not search the web."
+                    ),
+                }
 
         if name == "query_db" and self.mode.role == "oac":
             dest = str(args.get("dest") or args.get("file") or "")
@@ -1833,22 +3129,211 @@ class ChatSession:
         return result
 
     def _self_identity_turn(self, user_text: str) -> bool:
-        if getattr(self, "_turn_hayden_db_ok", False):
-            return True
         return self_identity_context(user_text, standing_request(self.convo_memory))
 
+    def _personal_db_turn(self, user_text: str) -> bool:
+        """Personal-life asks should use the DB, not the open web for biography."""
+        if hayden_asking_about_self(user_text):
+            return True
+        if wants_open_web(user_text):
+            return False
+        if personal_memory_question(user_text):
+            return True
+        if personal_memory_question(standing_request(self.convo_memory)):
+            return True
+        return False
+
+    def _prefetch_calendar_context(
+        self,
+        user_text: str,
+        *,
+        on_tool: ToolCallback | None = None,
+    ) -> str:
+        """Calendar is model-driven only — no host auto query / auto tool card."""
+        _ = user_text, on_tool
+        return ""
+
+    def _prefetch_turn_context(
+        self,
+        user_text: str,
+        *,
+        on_tool: ToolCallback | None = None,
+    ) -> None:
+        """Pull relevant stored facts into the system prompt before the model answers."""
+        self._injected_context = ""
+        if (
+            wants_videos(user_text)
+            or is_action_confirm(user_text)
+            or is_short_ack(user_text)
+            or is_vague_search_followup(user_text)
+        ):
+            return
+        parts: list[str] = []
+        # Schedule asks: do not auto-run query_calendar or inject a fake digest.
+        # OAC must call query_calendar itself. Still skip query_db so it doesn't steal.
+        if should_prefetch_calendar(
+            user_text, standing_request(self.convo_memory), self.recent_turns
+        ) and not hayden_asking_about_self(user_text):
+            self._injected_context = ""
+            return
+        if not should_prefetch(user_text, standing_request(self.convo_memory), self.recent_turns):
+            self._injected_context = "\n\n".join(parts)
+            return
+        prior_user = " ".join(u for u, _a in (self.recent_turns or [])[-4:])
+        tokens = extract_query_tokens(
+            user_text, standing_request(self.convo_memory), prior_user
+        )
+        if hayden_asking_about_self(user_text):
+            args: dict[str, Any] = {"dest": "hayden"}
+        else:
+            if not tokens:
+                self._injected_context = "\n\n".join(parts)
+                return
+            args = {"q": " ".join(tokens[:10])}
+        low = user_text.casefold()
+        if any(w in low for w in (" pin", "pins", "password", "secret")):
+            args["include_secrets"] = True
+            if not args.get("dest"):
+                args["dest"] = "secrets"
+        if hayden_asking_about_self(user_text):
+            card = "what we have on you"
+        else:
+            bits = tokens[-3:] if tokens else []
+            card = " ".join(bits) if bits else "stored notes"
+        if on_tool:
+            try:
+                self._emit_tool_start(
+                    on_tool, "query_db", {**args, "auto": True, "about": card}
+                )
+            except Exception:
+                pass
+        try:
+            result = self._run_tool_call(
+                {"function": {"name": "query_db", "arguments": args}}
+            )
+        except Exception:
+            if on_tool:
+                try:
+                    on_tool("done", "query_db", {"ok": False, "summary": "auto context failed"})
+                except Exception:
+                    pass
+            self._injected_context = "\n\n".join(parts)
+            return
+        digest = ""
+        count = 0
+        if isinstance(result, dict):
+            digest = str(result.get("digest") or "").strip()
+            count = int(result.get("count") or 0)
+        digest = compact_digest(digest, tokens)
+        if on_tool:
+            try:
+                on_tool(
+                    "done",
+                    "query_db",
+                    {
+                        "ok": bool(digest),
+                        "summary": f"auto context · {count} matches",
+                    },
+                )
+            except Exception:
+                pass
+        if digest:
+            parts.append(digest)
+            self._hayden_db_digest = digest
+            self.last_tool_names = list(getattr(self, "last_tool_names", None) or []) + [
+                "query_db"
+            ]
+            if hayden_asking_about_self(user_text):
+                self._turn_hayden_db_ok = True
+                self._force_prose_after_hayden_db = True
+        self._injected_context = "\n\n".join(parts)
+
+    def _retry_answer_in_thread(
+        self,
+        user_text: str,
+        *,
+        stream: bool,
+        on_token: TokenCallback | None,
+        on_thinking: ThinkingCallback | None,
+        think: bool,
+        req_timeout: float,
+        vis_filter: VisibleTokenFilter | None,
+    ) -> str:
+        """Force a reply that uses the live thread instead of therapy templates / bios."""
+        self._begin_host_retry("empty_therapy_or_dump")
+        if self.messages and self.messages[-1].get("role") == "assistant":
+            self.messages.pop()
+        prior = ""
+        if self.recent_turns:
+            chunks = []
+            for user, _ans in self.recent_turns[-4:]:
+                bit = " ".join((user or "").split())[:160]
+                if bit:
+                    chunks.append(bit)
+            prior = " Thread so far: " + " → ".join(chunks) if chunks else ""
+        known = (self._injected_context or "").strip()
+        known_bit = f" Relevant stored facts (use, do not recap): {known[:800]}" if known else ""
+        self.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Host note: your last draft ignored the live conversation or dumped a biography. "
+                    f"Hayden just said: {user_text!r}.{prior}{known_bit} "
+                    "Answer THIS message. Use the specifics he named (classes, gym, clubs, constraints). "
+                    "If he pushed back, engage the pushback. "
+                    "No numbered generic lists. No 'you're not alone' / 'I'm here' closer. "
+                    "No 'You're a mechanical engineering student…' recap."
+                ),
+            }
+        )
+        try:
+            if stream and (on_token is not None or on_thinking is not None):
+
+                def _tok(delta: str) -> None:
+                    if vis_filter is not None:
+                        vis_filter.feed(delta)
+                    elif on_token is not None:
+                        on_token(delta)
+
+                response = self.client.chat_stream(
+                    self.messages,
+                    tools=None,
+                    think=think,
+                    timeout_s=req_timeout,
+                    on_token=_tok if on_token is not None else None,
+                    on_thinking=on_thinking,
+                )
+            else:
+                response = self.client.chat(
+                    self.messages,
+                    tools=None,
+                    think=think,
+                    timeout_s=req_timeout,
+                )
+        except Exception:
+            return ""
+        message = response.get("message") or {}
+        self.messages.append(message)
+        content = str(message.get("content") or "")
+        visible, _mem = split_reply(content)
+        return (visible or content).strip()
+
     def _reject_open_web_for_self(self, user_text: str) -> dict[str, Any] | None:
-        if not self._self_identity_turn(user_text):
+        if wants_open_web(user_text):
+            return None
+        if not hayden_asking_about_self(user_text):
             return None
         return {
             "ok": False,
             "blocked": True,
             "error": (
-                "web_search and web_fetch are blocked while answering questions about Hayden himself."
+                "web_search and web_fetch are blocked while answering questions about "
+                "Hayden's stored identity."
             ),
             "hint": (
-                "Use query_db dest=hayden and answer from matches[].entries[].text already in this turn. "
-                "Do not search the open web for who Hayden is — that pulls unrelated companies and bios."
+                "Use query_db dest=hayden (or the injected KNOWN CONTEXT) "
+                "and answer from digest or matches[].entries[].text. "
+                "Do not search the open web for who Hayden is."
             ),
         }
 
@@ -1983,7 +3468,7 @@ class ChatSession:
     def _scope_tool_args(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if not self.project_root:
             return args
-        if name in PROJECT_SESSION_TOOLS | {
+        if name in PROJECT_SESSION_TOOLS | CALENDAR_SESSION_TOOLS | {
             "web_search",
             "web_fetch",
             "image_search",

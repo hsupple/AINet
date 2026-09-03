@@ -32,6 +32,8 @@ class IdleSOIWatcher:
         self._kick = threading.Event()
         self._kick_phase: str | None = None
         self._cancel_job = threading.Event()
+        # Explicit Stop SOI — stays off until Start SOI. Distinct from mid-run interrupt.
+        self._paused = False
         self._active = threading.Event()
         self._busy = threading.Lock()
         self._next_ok_at = 0.0
@@ -63,6 +65,7 @@ class IdleSOIWatcher:
             return {"started": False, "reason": "watcher failed to start"}
         if self.busy:
             return {"started": False, "reason": "already running"}
+        self._paused = False
         self._cancel_job.clear()
         self._kick_phase = "filing"
         self._active.set()
@@ -72,8 +75,15 @@ class IdleSOIWatcher:
     def request_read_refresh(self) -> dict[str, bool | str]:
         return {"started": False, "reason": "phase 2 removed"}
 
-    def cancel_job(self) -> dict[str, bool | str]:
+    def cancel_job(self, *, pause: bool = True) -> dict[str, bool | str]:
+        """Interrupt the active filing job.
+
+        pause=True (Stop SOI): stay off until Start SOI.
+        pause=False: abort this run only; automatic idle filing may resume.
+        """
         self._cancel_job.set()
+        if pause:
+            self._paused = True
         self._kick.clear()
         self._kick_phase = None
         worker = self.worker
@@ -89,6 +99,7 @@ class IdleSOIWatcher:
 
     def stop(self) -> None:
         self._stop.set()
+        self._paused = True
         self._cancel_job.set()
         self._kick_phase = None
         self._kick.set()
@@ -125,7 +136,6 @@ class IdleSOIWatcher:
                     self._kick.set()
                 continue
             try:
-                worker.cancel_event = self._cancel_job
                 idle_ready = kicked or idle >= self.config.soi_idle_seconds
                 if idle_ready and time.monotonic() - self._last_decay_at >= 900:
                     try:
@@ -144,9 +154,15 @@ class IdleSOIWatcher:
                             )
                     except Exception as exc:  # noqa: BLE001
                         logger.log("decay_error", level="error", error=str(exc))
+                # Stop SOI stays off until Start — do not spam wake/cancel every 3s.
+                if self._paused and not kicked:
+                    continue
                 can_file = worker.has_filing_work() and idle_ready
                 if not can_file:
                     continue
+                # Fresh interrupt latch per attempt (a prior Stop/stall must not stick forever).
+                self._cancel_job.clear()
+                worker.cancel_event = self._cancel_job
                 logger.log(
                     "idle_wake",
                     phase="filing",
@@ -179,6 +195,9 @@ class IdleSOIWatcher:
                 logger.log("error", level="error", error=str(exc))
                 logger.log("backoff", seconds=self.error_backoff_s, reason=str(exc))
             finally:
+                # Drop interrupt latch unless Stop SOI paused the watcher.
+                if not self._paused:
+                    self._cancel_job.clear()
                 self._busy.release()
                 if kicked:
                     self._active.clear()

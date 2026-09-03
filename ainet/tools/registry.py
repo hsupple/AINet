@@ -28,6 +28,7 @@ READ_TOOL_NAMES = frozenset(
         "open_chrome",
         "spotify",
         "list_projects",
+        "query_calendar",
     }
 )
 OAC_TOOL_NAMES = READ_TOOL_NAMES
@@ -40,7 +41,24 @@ PROJECT_SESSION_TOOLS = frozenset(
         "close_project",
     }
 )
+# Calendar mutations are allowed for OAC the same way project session tools are.
+CALENDAR_SESSION_TOOLS = frozenset(
+    {
+        "query_calendar",
+        "add_calendar_event",
+        "update_calendar_event",
+        "cancel_calendar_event",
+    }
+)
 
+# Display-only phrase for the chat tool card. Handlers ignore this key.
+_CARD_ABOUT: dict[str, Any] = {
+    "type": "string",
+    "description": (
+        "A few words for the chat card saying what you are looking up "
+        "(e.g. 'human biology overview'). Not used to search or filter."
+    ),
+}
 
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
@@ -110,13 +128,17 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "query_db",
             "description": (
-                "Look up stored personal facts. Knowledge files are maps of named keys to "
-                "observation lists (a person name maps to [{\"time\", \"text\"}, ...]). "
-                "Routing: dest=hayden when Hayden asks about himself (who am I, my characteristics, "
-                "my personality, traits). dest=people only for other people in his life. "
-                "Filter by dest/file, name, q, and dates. "
-                "Omit dest to search all files except secrets. "
-                "Answer from entries[].text in plain speech — do not read back count/strength unless asked."
+                "Look up Hayden's stored personal database. The host may already inject "
+                "relevant facts as KNOWN CONTEXT — use those silently (do not recap his bio). "
+                "Do not use this for Hayden's calendar or schedule — use query_calendar. "
+                "Call this when you still need a stored fact that is not in that block: "
+                "identity, friends, habits, preferences, home, feelings, memories, or past questions. "
+                "First-person statements count, not only questions. "
+                "Do not invent those from general knowledge or the web. "
+                "q accepts multiple words at once; matches if any of those words hit. "
+                "Omit dest to search all files except secrets. Prefer broad search, then narrow. "
+                "Answer from digest / entries[].text in second person (you/your). "
+                "Only use the facts that matter to this message."
             ),
             "parameters": {
                 "type": "object",
@@ -139,7 +161,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     },
                     "q": {
                         "type": "string",
-                        "description": "Words that must appear in the name or observation text",
+                        "description": (
+                            "One or more words to match in the key or observation text "
+                            "(space-separated; any word can hit — useful for short phrases)"
+                        ),
                     },
                     "after": {
                         "type": "string",
@@ -168,7 +193,184 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "description": "Max matching keys to return (default 16, max 40)",
                         "default": 16,
                     },
+                    "about": _CARD_ABOUT,
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_calendar",
+            "description": (
+                "Look up Hayden's calendar (db/Calendar.json). "
+                "ALWAYS pass start and end as YYYY-MM-DD for the exact day Hayden named. "
+                "today/tonight → both = today's date; tomorrow → tomorrow; "
+                "Monday/next Monday → that Monday; this week/next week → that week's Monday–Sunday. "
+                "Phrases like 'today's stuff' still mean today — do not put that text in q. "
+                "Leave q empty to list everything on those dates. "
+                "Only set q for a real event: a course code (MA 265), test/exam/quiz/lab, or a title word. "
+                "Never put greetings or filler in q (pal, hey, stuff, classes, schedule). "
+                "Do not invent events. Do not use query_db for the calendar."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start": {
+                        "type": "string",
+                        "description": (
+                            "Range start YYYY-MM-DD. Required. "
+                            "Must be the date Hayden asked about (today, tomorrow, that Monday, etc.)."
+                        ),
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": (
+                            "Range end YYYY-MM-DD inclusive. Same as start for a single day."
+                        ),
+                    },
+                    "q": {
+                        "type": "string",
+                        "description": (
+                            "Optional. Course code or event kind only (e.g. 'MA 265 test'). "
+                            "Empty for a full day. Never 'today', 'stuff', or a greeting."
+                        ),
+                    },
+                    "upcoming": {
+                        "type": "integer",
+                        "description": "Return the next N upcoming occurrences from now",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max occurrences (default 40, max 80)",
+                        "default": 40,
+                    },
+                    "about": _CARD_ABOUT,
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_calendar_event",
+            "description": (
+                "Add an event to Hayden's calendar. OAC may call this even without a focused project. "
+                "Set when it starts, how long (end or duration_minutes), whether it repeats, "
+                "and until when. Use local times unless timezone is given."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Event title"},
+                    "start": {
+                        "type": "string",
+                        "description": "Start as YYYY-MM-DD or ISO local datetime",
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "End as YYYY-MM-DD or ISO local datetime",
+                    },
+                    "duration_minutes": {
+                        "type": "integer",
+                        "description": "Length in minutes if end is omitted (default 60, or 1440 if all-day)",
+                    },
+                    "all_day": {
+                        "type": "boolean",
+                        "description": "True for an all-day event",
+                        "default": False,
+                    },
+                    "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone; defaults to local",
+                    },
+                    "repeat": {
+                        "type": "string",
+                        "description": "none | daily | weekly | monthly | yearly",
+                        "default": "none",
+                    },
+                    "interval": {
+                        "type": "integer",
+                        "description": "Repeat every N periods (default 1)",
+                        "default": 1,
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": "Repeat through this date (YYYY-MM-DD)",
+                    },
+                    "byweekday": {
+                        "description": "For weekly: MO,TU,WE,TH,FR,SA,SU or a list of those",
+                    },
+                    "location": {"type": "string"},
+                    "notes": {"type": "string"},
+                    "category": {
+                        "type": "string",
+                        "description": "school | work | personal | health | social | other",
+                    },
+                    "color": {"type": "string", "description": "Optional hex color"},
+                    "reminder_minutes": {
+                        "description": "Minutes before start, e.g. 15 or [15, 60]",
+                    },
+                    "about": _CARD_ABOUT,
+                },
+                "required": ["title", "start"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_calendar_event",
+            "description": (
+                "Update an existing calendar event by id. Pass only the fields that change. "
+                "OAC may call this even without a focused project."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Event id from query_calendar"},
+                    "title": {"type": "string"},
+                    "start": {"type": "string"},
+                    "end": {"type": "string"},
+                    "duration_minutes": {"type": "integer"},
+                    "all_day": {"type": "boolean"},
+                    "timezone": {"type": "string"},
+                    "repeat": {"type": "string"},
+                    "interval": {"type": "integer"},
+                    "until": {"type": "string"},
+                    "byweekday": {"description": "Weekly weekdays (MO,TU,…)"},
+                    "location": {"type": "string"},
+                    "notes": {"type": "string"},
+                    "category": {"type": "string"},
+                    "color": {"type": "string"},
+                    "reminder_minutes": {"description": "Minutes before start"},
+                    "cancelled": {"type": "boolean"},
+                    "about": _CARD_ABOUT,
+                },
+                "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_calendar_event",
+            "description": (
+                "Cancel (or permanently delete) a calendar event by id. "
+                "OAC may call this even without a focused project."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Event id from query_calendar"},
+                    "delete": {
+                        "type": "boolean",
+                        "description": "If true, remove the event instead of marking cancelled",
+                        "default": False,
+                    },
+                    "about": _CARD_ABOUT,
+                },
+                "required": ["id"],
             },
         },
     },
@@ -475,6 +677,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "default": 5,
                         "description": "Number of results (1-8).",
                     },
+                    "about": _CARD_ABOUT,
                 },
                 "required": ["query"],
             },
@@ -507,6 +710,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "default": True,
                         "description": "Open a Google Images tab in Chrome (default true).",
                     },
+                    "about": _CARD_ABOUT,
                 },
                 "required": ["query"],
             },
@@ -631,6 +835,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "default": 5,
                         "description": "Search / liked list count",
                     },
+                    "about": _CARD_ABOUT,
                 },
                 "required": [],
             },
@@ -656,6 +861,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "default": 4000,
                         "description": "Max characters of plain text to return (capped).",
                     },
+                    "about": _CARD_ABOUT,
                 },
                 "required": ["url"],
             },
@@ -688,6 +894,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "default": True,
                         "description": "Open in a new tab (default true).",
                     },
+                    "about": _CARD_ABOUT,
                 },
             },
         },
@@ -822,7 +1029,7 @@ def catalog_tools(
         name = fn.get("name")
         if not name or (name == "get_tools" and not include_meta):
             continue
-        if read_only and name not in OAC_TOOL_NAMES:
+        if read_only and name not in OAC_TOOL_NAMES and name not in CALENDAR_SESSION_TOOLS:
             continue
         item: dict[str, Any] = {
             "name": name,
@@ -838,7 +1045,7 @@ def catalog_tools(
         "tools": tools,
         "unlocks_full_access": not read_only,
         "note": (
-            "OAC catalog: read + web (no general DB writes)."
+            "OAC catalog: read + web + calendar (no general DB writes)."
             if read_only
             else "Full tool access unlocked for subsequent calls this session."
         ),
@@ -869,6 +1076,87 @@ def _tool_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _calendar_root(db: DatabaseTools) -> Any:
+    return db.paths.root
+
+
+def _query_calendar_tool(db: DatabaseTools, **kw: Any) -> dict[str, Any]:
+    from ainet.calendar_store import infer_schedule_query, query_events
+
+    blob = " ".join(
+        str(kw.get(k) or "")
+        for k in ("q", "query", "about")
+        if str(kw.get(k) or "").strip()
+    )
+    inferred = infer_schedule_query(blob) if blob.strip() else {}
+    start = str(kw.get("start") or inferred.get("start") or "")
+    end = str(kw.get("end") or inferred.get("end") or "")
+    q = str(inferred.get("q") or "").strip()
+    upcoming = kw.get("upcoming")
+    if inferred.get("date_explicit"):
+        # Natural-language q/about named a day — that day wins over a stale range.
+        start = str(inferred.get("start") or start)
+        end = str(inferred.get("end") or end)
+        upcoming = None
+    elif inferred.get("upcoming") and upcoming in (None, ""):
+        upcoming = inferred.get("upcoming")
+    result = query_events(
+        _calendar_root(db),
+        start=start,
+        end=end,
+        q=q,
+        upcoming=int(upcoming) if upcoming not in (None, "") else None,
+        limit=int(kw.get("limit", 40)),
+        include_cancelled=_tool_bool(kw.get("include_cancelled"), False),
+    )
+    rows = [e for e in (result.get("events") or []) if isinstance(e, dict)]
+    slim_rows = [
+        {
+            "title": r.get("title"),
+            "start": r.get("start"),
+            "end": r.get("end"),
+            "location": r.get("location") or "",
+            "occurrence_date": r.get("occurrence_date"),
+        }
+        for r in rows
+    ]
+    return {
+        "ok": True,
+        "start": result.get("start"),
+        "end": result.get("end"),
+        "count": len(slim_rows),
+        "digest": result.get("digest") or "",
+        "events": slim_rows,
+        "hint": (
+            "Answer ONLY from digest. One line per event. "
+            "Only the dates in this result — no weekly recap, no markdown tables, "
+            "no extra days, no Repeat fields."
+        ),
+    }
+
+
+def _add_calendar_tool(db: DatabaseTools, **kw: Any) -> dict[str, Any]:
+    from ainet.calendar_store import add_event
+
+    return add_event(_calendar_root(db), kw)
+
+
+def _update_calendar_tool(db: DatabaseTools, **kw: Any) -> dict[str, Any]:
+    from ainet.calendar_store import update_event
+
+    return update_event(_calendar_root(db), kw)
+
+
+def _cancel_calendar_tool(db: DatabaseTools, **kw: Any) -> dict[str, Any]:
+    from ainet.calendar_store import cancel_event
+
+    return cancel_event(
+        _calendar_root(db),
+        str(kw.get("id") or ""),
+        delete=_tool_bool(kw.get("delete"), False),
+    )
+
+
 def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
     from ainet.logstore import log_item as log_item_fn
     from ainet.logstore import query_db as query_db_fn
@@ -879,6 +1167,10 @@ def _handlers(db: DatabaseTools) -> dict[str, Callable[..., dict[str, Any]]]:
         "tree": lambda **kw: db.tree(kw.get("path", "."), int(kw.get("max_depth", 3))),
         "read_text": lambda **kw: db.read_text(kw["path"]),
         "read_json": lambda **kw: db.read_json(kw["path"]),
+        "query_calendar": lambda **kw: _query_calendar_tool(db, **kw),
+        "add_calendar_event": lambda **kw: _add_calendar_tool(db, **kw),
+        "update_calendar_event": lambda **kw: _update_calendar_tool(db, **kw),
+        "cancel_calendar_event": lambda **kw: _cancel_calendar_tool(db, **kw),
         "query_db": lambda **kw: query_db_fn(
             db,
             dest=str(kw.get("dest") or ""),

@@ -18,7 +18,9 @@ READ_TOOLS = (
     "open_chrome",
     "spotify",
     "list_projects",
+    "query_calendar",
 )
+CALENDAR_WRITE = ("add_calendar_event", "update_calendar_event", "cancel_calendar_event")
 WRITE_LIGHT = ("patch_json", "set_json_path", "create_json", "write_json")
 STRUCT_TOOLS = ("create_folder", "move_path")
 META_TOOLS = ("get_tools",)
